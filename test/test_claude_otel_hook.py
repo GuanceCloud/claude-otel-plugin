@@ -15,6 +15,10 @@ sys.modules[SPEC.name] = hook
 SPEC.loader.exec_module(hook)
 
 
+def json_attr(attrs, key):
+    return json.loads(attrs[key])
+
+
 class ClaudeOtelHookTest(unittest.TestCase):
     def test_extract_session_and_transcript_supports_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -405,6 +409,24 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(root["gen_ai.provider.name"], "anthropic")
         self.assertEqual(root["gen_ai.usage.input_tokens"], 125)
         self.assertEqual(root["gen_ai.usage.cache_read.input_tokens"], 25)
+        self.assertEqual(
+            json_attr(root, "gen_ai.input.messages"),
+            [{"role": "user", "parts": [{"type": "text", "content": "list files"}]}],
+        )
+        self.assertEqual(
+            json_attr(llm, "gen_ai.input.messages"),
+            [{"role": "user", "parts": [{"type": "text", "content": "list files"}]}],
+        )
+        self.assertEqual(
+            json_attr(llm, "gen_ai.output.messages"),
+            [{
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "content": "I'll inspect."},
+                    {"type": "tool_call", "name": "Bash", "id": "tool-1", "arguments": "{\"command\": \"ls\"}"},
+                ],
+            }],
+        )
         self.assertEqual(llm["output_kind"], "tool_call")
         self.assertEqual(llm["gen_ai.operation.name"], "chat")
         self.assertEqual(tool["gen_ai.operation.name"], "execute_tool")
@@ -642,6 +664,45 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertGreater(assistant_spans[0].end_time - assistant_spans[0].start_time, 0)
         self.assertEqual(assistant_spans[1].end_time - assistant_spans[1].start_time, 0)
         self.assertEqual((root.end_time - root.start_time) / 1_000_000_000, 48.448)
+        self.assertEqual(
+            json_attr(root.attributes, "gen_ai.input.messages"),
+            [{"role": "user", "parts": [{"type": "text", "content": "today ai headlines"}]}],
+        )
+        self.assertEqual(
+            json_attr(llm_first.attributes, "gen_ai.output.messages"),
+            [{
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "content": "I'll search for today's top AI news."},
+                    {"type": "tool_call", "name": "WebSearch", "id": "tool-1", "arguments": "{\"query\": \"AI news June 25 2026\"}"},
+                    {"type": "tool_call", "name": "WebSearch", "id": "tool-2", "arguments": "{\"query\": \"artificial intelligence headlines today\"}"},
+                ],
+            }],
+        )
+        self.assertEqual(
+            json_attr(llm_second.attributes, "gen_ai.input.messages"),
+            [{
+                "role": "tool",
+                "name": "WebSearch",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "tool-1",
+                    "response": "news result 1",
+                }],
+            }, {
+                "role": "tool",
+                "name": "WebSearch",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "tool-2",
+                    "response": "news result 2",
+                }],
+            }],
+        )
+        self.assertEqual(
+            json_attr(llm_second.attributes, "gen_ai.output.messages"),
+            [{"role": "assistant", "parts": [{"type": "text", "content": "summary"}]}],
+        )
 
     def test_metric_recorders_use_genai_semantic_tags(self):
         class FakeHistogram:

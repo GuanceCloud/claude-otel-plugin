@@ -564,6 +564,85 @@ def truncate_text(value: Any, max_chars: int) -> Tuple[str, Dict[str, Any]]:
     }
 
 
+def message_value(value: Any, max_chars: int) -> Optional[str]:
+    text, _ = truncate_text(value, max_chars)
+    return text if text else None
+
+
+def text_part(value: Any, max_chars: int) -> Optional[Dict[str, Any]]:
+    content = message_value(value, max_chars)
+    return {"type": "text", "content": content} if content else None
+
+
+def tool_call_part(tool: Dict[str, Any], max_chars: int) -> Optional[Dict[str, Any]]:
+    name = tool.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    part: Dict[str, Any] = {"type": "tool_call", "name": name}
+    tool_id = tool.get("id")
+    if tool_id:
+        part["id"] = str(tool_id)
+    arguments = message_value(tool.get("input"), max_chars)
+    if arguments:
+        part["arguments"] = arguments
+    return part
+
+
+def tool_call_response_part(tool_result: Dict[str, Any], max_chars: int) -> Optional[Dict[str, Any]]:
+    response = message_value(tool_result.get("output"), max_chars)
+    error = message_value(tool_result.get("error"), max_chars)
+    if response is None and error is None:
+        return None
+    part: Dict[str, Any] = {"type": "tool_call_response"}
+    tool_id = tool_result.get("id")
+    if tool_id:
+        part["id"] = str(tool_id)
+    if error is None:
+        part["response"] = response
+    else:
+        payload: Dict[str, Any] = {}
+        if response is not None:
+            payload["output"] = response
+        payload["error"] = error
+        part["response"] = payload
+    return part
+
+
+def build_input_messages(user_text: str, tool_results: List[Dict[str, Any]], max_chars: int) -> Optional[List[Dict[str, Any]]]:
+    messages: List[Dict[str, Any]] = []
+    user_part = text_part(user_text, max_chars)
+    if user_part:
+        messages.append({"role": "user", "parts": [user_part]})
+
+    for tool_result in tool_results:
+        part = tool_call_response_part(tool_result, max_chars)
+        if not part:
+            continue
+        message: Dict[str, Any] = {"role": "tool", "parts": [part]}
+        name = tool_result.get("name")
+        if name:
+            message["name"] = name
+        messages.append(message)
+    return messages or None
+
+
+def build_output_messages(assistant_text: str, tool_uses: List[Dict[str, Any]], max_chars: int, finish_reason: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    parts: List[Dict[str, Any]] = []
+    text_message_part = text_part(assistant_text, max_chars)
+    if text_message_part:
+        parts.append(text_message_part)
+    for tool in tool_uses:
+        part = tool_call_part(tool, max_chars)
+        if part:
+            parts.append(part)
+    if not parts:
+        return None
+    message: Dict[str, Any] = {"role": "assistant", "parts": parts}
+    if finish_reason:
+        message["finish_reason"] = finish_reason
+    return [message]
+
+
 def _content_block_key(block: Any) -> Tuple[str, str]:
     if isinstance(block, str):
         return ("str", block)
@@ -651,6 +730,15 @@ def get_model(msg: Dict[str, Any]) -> str:
     if isinstance(msg.get("model"), str):
         return msg["model"]
     return "claude"
+
+
+def get_stop_reason(msg: Dict[str, Any]) -> Optional[str]:
+    nested = msg.get("message")
+    if isinstance(nested, dict) and isinstance(nested.get("stop_reason"), str):
+        return nested["stop_reason"]
+    if isinstance(msg.get("stop_reason"), str):
+        return msg["stop_reason"]
+    return None
 
 
 def get_usage(msg: Dict[str, Any]) -> Dict[str, int]:
@@ -1208,6 +1296,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     total_usage: Dict[str, int] = {}
     tool_count = 0
     final_text = ""
+    final_tool_uses: List[Dict[str, Any]] = []
     root_status = "ok"
     root_final_status = "completed"
     root_error_type = None
@@ -1215,7 +1304,9 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     root_error_status_code = None
     for assistant in turn.assistant_msgs:
         final_text = extract_text(get_content(assistant)) or final_text
-        tool_count += len(iter_tool_uses(get_content(assistant)))
+        assistant_tool_uses = iter_tool_uses(get_content(assistant))
+        final_tool_uses = assistant_tool_uses
+        tool_count += len(assistant_tool_uses)
         merge_usage(total_usage, usage_details(get_usage(assistant)))
         if is_api_error_message(assistant):
             status_code, error_type, reason = extract_api_error_info(assistant)
@@ -1244,6 +1335,12 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     })
     attr_set(root_attrs, "code.cwd", cwd)
     attr_set(root_attrs, "code.git_branch", git_branch)
+    attr_set(root_attrs, "gen_ai.input.messages", build_input_messages(user_text, [], config.max_chars))
+    attr_set(
+        root_attrs,
+        "gen_ai.output.messages",
+        build_output_messages(final_text, final_tool_uses, config.max_chars, get_stop_reason(turn.assistant_msgs[-1]) if turn.assistant_msgs else None),
+    )
     add_usage_attrs(root_attrs, total_usage)
     add_truncation_attrs(root_attrs, "input", user_meta)
 
@@ -1294,6 +1391,16 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             "reason": api_error_reason if is_api_error else None,
             "http.status_code": api_status_code if is_api_error else None,
         })
+        attr_set(
+            generation_attrs,
+            "gen_ai.input.messages",
+            build_input_messages(user_text if idx == 0 else "", prev_tool_results if idx > 0 else [], config.max_chars),
+        )
+        attr_set(
+            generation_attrs,
+            "gen_ai.output.messages",
+            build_output_messages(assistant_text, tool_uses, config.max_chars, get_stop_reason(assistant)),
+        )
         add_usage_attrs(generation_attrs, usage)
 
         generation = tracer.start_span(
@@ -1357,6 +1464,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             record_operation_metrics(metrics, tool_attrs, duration_s(assistant_ts, result_ts or assistant_ts), "execute_tool")
             batch_tool_results.append(
                 {
+                    "id": tool_id,
                     "name": tool_name,
                     "output": tool_output,
                     **({"error": tool_output} if is_error else {}),
