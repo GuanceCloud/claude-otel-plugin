@@ -68,12 +68,21 @@ cat > ~/.claude/gtrace.json <<'JSON'
   "headers": {
     "X-Token": "<token>",
     "To-Headless": "true"
+  },
+  "resourceAttributes": {
+    "deployment.environment": "prod",
+    "app_id": "claude-monitor",
+    "app_name": "Claude OTEL",
+    "agent_type": "assistant",
+    "agent_source": "claude-code"
   }
 }
 JSON
 ```
 
 Restart Claude Code, or run `/reload-plugins`.
+
+`resourceAttributes` are exported as shared resource tags on traces and metrics.
 
 For installation, upgrade, uninstall, and dependency details, see
 [docs/install.md](docs/install.md).
