@@ -1,58 +1,50 @@
 # claude-otel-plugin
 
-Claude Code OpenTelemetry plugin. It reads Claude Code transcript JSONL from
-`Stop` and `SessionEnd` hooks, converts turns, assistant generations, tool
-calls, tool results, and token usage into OTLP traces and metrics, then exports
-them over OTLP HTTP/protobuf.
+`claude-otel-plugin` 是一个 Claude Code OpenTelemetry 采集插件。它通过
+Claude Code `Stop` 和 `SessionEnd` hooks 读取 transcript JSONL，将 turn、
+模型生成、工具调用、工具结果和 token usage 转换为 OTLP Trace 与 Metrics，并
+通过 HTTP/protobuf 上报。
 
-The hook is fail-open: missing dependencies, missing config, parse errors, and
-upload failures are logged but do not block Claude Code.
+Hook 是 fail-open 设计：依赖缺失、配置缺失、解析失败或上报失败会写日志，但
+不会阻塞 Claude Code。
 
-## Layout
+## 能力概览
+
+- 采集 Claude Code turn、assistant generation、tool call、tool result 和 token usage。
+- 生成 `invoke_agent`、`llm`、`assistant`、`tool:<name>` 四类 span。
+- 使用 OTLP Trace 与 Metrics HTTP/protobuf 上报。
+- Metrics 从同批 turn 数据派生，触发时机与 traces 相同。
+- 支持 Dataway/GTrace 风格的 `endpoint + tracePath + metricsPath + headers` 配置。
+- 支持 `~/.claude/gtrace.json`、项目 `.claude/gtrace.json` 和 OTLP 环境变量。
+
+## 工作流程
 
 ```text
-.claude-plugin/plugin.json
-hooks/hooks.json
-hooks/claude_otel_hook.py
-test/test_claude_otel_hook.py
+Claude Code Stop / SessionEnd hook
+    |
+    v
+hooks/claude_otel_hook.py 读取 transcript JSONL
+    |
+    v
+解析 turn、模型调用、工具调用和 usage
+    |
+    v
+生成 OTLP traces 与 metrics
+    |
+    v
+POST <endpoint>/<tracePath>
+POST <endpoint>/<metricsPath>
 ```
 
-## Requirements
+## 快速开始
+
+要求：
 
 - Claude Code with plugin support
 - Python 3.10+
-- `uv` recommended
+- 推荐安装 `uv`
 
-`hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. With `uv` on
-PATH, Claude Code runs:
-
-```bash
-uv run --quiet --script hooks/claude_otel_hook.py
-```
-
-Without `uv`, the hook falls back to `python3`, and the environment must already
-have:
-
-```bash
-pip install "opentelemetry-api>=1.25,<2" \
-  "opentelemetry-sdk>=1.25,<2" \
-  "opentelemetry-exporter-otlp-proto-http>=1.25,<2"
-```
-
-## Installation
-
-Install `uv` first if you want Claude Code to resolve the hook dependencies
-automatically:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-If you do not use `uv`, install the Python dependencies listed in
-[Requirements](#requirements) into the `python3` environment Claude Code uses.
-
-From inside Claude Code, add this repository as a plugin marketplace and install
-the plugin:
+在 Claude Code 中添加 marketplace 并安装插件：
 
 ```text
 /plugin marketplace add GuanceCloud/claude-otel-plugin
@@ -60,18 +52,7 @@ the plugin:
 /reload-plugins
 ```
 
-The repository is private, so the machine running Claude Code must have GitHub
-access to `GuanceCloud/claude-otel-plugin`.
-
-You can also install from a local checkout while developing or testing changes:
-
-```text
-/plugin marketplace add /path/to/claude-otel-plugin
-/plugin install claude-otel-plugin@claude-otel-plugin
-/reload-plugins
-```
-
-After installation, create a config file:
+写入上报配置：
 
 ```bash
 mkdir -p ~/.claude
@@ -89,207 +70,42 @@ cat > ~/.claude/gtrace.json <<'JSON'
 JSON
 ```
 
-Restart Claude Code or run `/reload-plugins`. The hook starts exporting after
-Claude Code emits `Stop` or `SessionEnd` hook events.
+安装完成后重启 Claude Code，或执行 `/reload-plugins`。
 
-To update an existing installation:
+更多安装、升级、卸载和依赖说明见 [docs/install.md](docs/install.md)。
 
-```text
-/plugin marketplace update claude-otel-plugin
-/reload-plugins
-```
+## 文档导航
 
-To uninstall:
+| 文档 | 说明 |
+| --- | --- |
+| [docs/install.md](docs/install.md) | 安装、升级、卸载、依赖和本地安装 |
+| [docs/configuration.md](docs/configuration.md) | 配置读取顺序、GTrace 配置、环境变量和 resource attributes |
+| [docs/traces.md](docs/traces.md) | Trace/span 结构、字段命名、token 口径和字段迁移 |
+| [docs/metrics.md](docs/metrics.md) | Metrics 指标体系、tag 和旧指标迁移 |
+| [docs/development.md](docs/development.md) | 本地验证、日志、状态文件和排查方式 |
 
-```text
-/plugin uninstall claude-otel-plugin@claude-otel-plugin
-```
+## 数据模型
 
-## Configuration
+Trace 字段、span name、tool call/result、token 口径和旧字段迁移关系见
+[docs/traces.md](docs/traces.md)。
 
-The hook resolves config in this order, later items overriding earlier ones:
+Metrics 指标体系、tag 设计和旧指标迁移关系见
+[docs/metrics.md](docs/metrics.md)。
 
-1. Claude plugin `CLAUDE_PLUGIN_OPTION_*` values
-2. global `~/.claude/gtrace.json`
-3. project `.claude/gtrace.json`
-4. ordinary environment variables
+当前 Metrics 只从当前 turn 数据派生以下 OpenTelemetry GenAI 指标：
 
-For day-to-day maintenance, prefer `~/.claude/gtrace.json`. Plugin userConfig is
-kept as a fallback for first-time install and for sensitive values stored by
-Claude Code.
+- `gen_ai.workflow.duration`
+- `gen_ai.client.operation.duration`
+- `gen_ai.client.token.usage`
 
-Supported `gtrace.json`:
+## 开发
 
-```json
-{
-  "enabled": true,
-  "endpoint": "http://localhost:4318",
-  "tracePath": "v1/traces",
-  "metricsPath": "v1/metrics",
-  "headers": {
-    "Authorization": "Bearer token"
-  },
-  "resourceAttributes": {
-    "service.name": "claude-code",
-    "deployment.environment": "dev"
-  },
-  "timeout_ms": 10000,
-  "debug": true,
-  "max_chars": 20000
-}
-```
-
-You can also use standard OTLP-style env vars:
+常用命令：
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces
-export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:4318/v1/metrics
-export OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer token'
-export OTEL_RESOURCE_ATTRIBUTES='service.name=claude-code,deployment.environment=dev'
-```
-
-If `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
-`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is set, it overrides `endpoint +
-tracePath` or `endpoint + metricsPath`.
-
-For Guance/GTrace, this is the expected shape:
-
-```json
-{
-  "enabled": true,
-  "endpoint": "https://llm-openway.guance.com",
-  "tracePath": "v1/write/otel-llm",
-  "metricsPath": "v1/write/otel-metrics",
-  "headers": {
-    "X-Token": "<token>",
-    "To-Headless": "true"
-  }
-}
-```
-
-When `tracePath` is `v1/write/otel-llm` and no metrics path is explicitly set,
-the hook infers `v1/write/otel-metrics`.
-
-## Trace Shape
-
-Each completed Claude Code turn keeps the existing span tree shape, while span
-attributes follow OpenTelemetry GenAI semantic conventions. API error turns are
-marked as `status=error`, and when Claude records `turn_duration` or
-`toolUseResult.durationSeconds`, those values are preferred over delayed
-transcript timestamps:
-
-```text
-invoke_agent
-  llm
-    assistant
-    tool:<name>
-  llm
-```
-
-Important attributes:
-
-- `gen_ai.conversation.id`
-- `session_id` for compatibility with existing dashboards
-- `gen_ai.agent.name=claude-code`
-- `gen_ai.agent.version`
-- `gen_ai.operation.name=invoke_agent|chat|execute_tool`
-- `gen_ai.provider.name=anthropic`
-- `gen_ai.request.model`
-- `gen_ai.response.model`
-- `gen_ai.usage.input_tokens`
-- `gen_ai.usage.output_tokens`
-- `gen_ai.usage.cache_read.input_tokens`
-- `gen_ai.usage.cache_creation.input_tokens`
-- `gen_ai.tool.name`
-- `gen_ai.tool.call.id`
-- `gen_ai.tool.call.arguments`
-- `gen_ai.tool.call.result`
-- `run_id`, `run_ids`, `request_type`, `is_internal_request`
-- `input_preview`, `input_length`, `output_preview`, `output_length`
-- `tool_count`, `tool_command`, `tool_result_status`
-- `host`, `host.name` on resource and metric attributes
-
-`gen_ai.usage.input_tokens` uses the OpenTelemetry GenAI meaning: full input
-tokens, including cache read and cache creation tokens when Claude reports them.
-
-## Metrics Shape
-
-Metrics are emitted from the same parsed turn data and use OpenTelemetry GenAI
-metric names:
-
-| Metric | Type | Unit |
-| --- | --- | --- |
-| `gen_ai.workflow.duration` | Histogram | `s` |
-| `gen_ai.client.operation.duration` | Histogram | `s` |
-| `gen_ai.client.token.usage` | Histogram | `{token}` |
-
-Common metric tags include `session_id`, `gen_ai.conversation.id`,
-`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`,
-`gen_ai.response.model`, `host`, and `host.name`. Tool operation metrics also
-carry `gen_ai.tool.name` and `tool_result_status`; token metrics carry
-`gen_ai.token.type=input|output`.
-
-## Field Mapping
-
-Trace field changes:
-
-| Previous field | New field / behavior |
-| --- | --- |
-| `session_id` | Kept and also copied to `gen_ai.conversation.id` |
-| `session_agent` | `gen_ai.agent.name` |
-| `agent_version` | `gen_ai.agent.version` |
-| `provider_name` | `gen_ai.provider.name` |
-| `model_name` | `gen_ai.request.model`, `gen_ai.response.model` |
-| `usage_input_tokens` | `gen_ai.usage.input_tokens` |
-| `usage_output_tokens` | `gen_ai.usage.output_tokens` |
-| `usage_total_tokens` | Removed; derive from input + output if needed |
-| `usage_cache_read_input_tokens` | `gen_ai.usage.cache_read.input_tokens` |
-| `usage_cache_creation_input_tokens` | `gen_ai.usage.cache_creation.input_tokens` |
-| `usage_cache_total_tokens` | Removed; same source as cache read |
-| `usage_context_input_tokens` | Removed; full input is `gen_ai.usage.input_tokens` |
-| `usage_context_total_tokens` | Removed |
-| `tool_name` | `gen_ai.tool.name` |
-| `tool_call_id` | `gen_ai.tool.call.id` |
-| `tool_args_preview` | `gen_ai.tool.call.arguments` |
-| `tool_result_preview` | `gen_ai.tool.call.result` |
-
-Metric changes:
-
-| Previous metric / tag | New metric / tag |
-| --- | --- |
-| `gen_ai.agent.request.count` | Removed |
-| `gen_ai.agent.request.duration` | `gen_ai.workflow.duration` |
-| `gen_ai.agent.operation.count` | Removed |
-| `gen_ai.agent.operation.duration` | `gen_ai.client.operation.duration` |
-| `gen_ai.agent.token.usage` | `gen_ai.client.token.usage` |
-| duration unit `ms` | duration unit `s` |
-| `session_id` | Kept and also copied to `gen_ai.conversation.id` |
-| `provider_name` | `gen_ai.provider.name` |
-| `model_name` | `gen_ai.request.model`, `gen_ai.response.model` |
-| `operation_name` | `gen_ai.operation.name` |
-| `tool_name` | `gen_ai.tool.name` |
-| `token_type` | `gen_ai.token.type` |
-| `token_type=total/cache_read/cache_total/reasoning` | Removed |
-
-## Local Test
-
-```bash
-cd /home/liurui/code/claude-otel-plugin
 python3 -m unittest discover -s test
 python3 -m py_compile hooks/claude_otel_hook.py
+claude plugin validate .
 ```
 
-For an end-to-end check, point `endpoint` at any OTLP HTTP collector and restart
-Claude Code after enabling the plugin.
-
-## Logs and State
-
-```text
-~/.claude/state/claude_otel_hook.log
-~/.claude/state/claude_otel_state.json
-~/.claude/state/claude_otel_state.lock
-```
-
-State tracks transcript byte offsets so repeated hook invocations only process
-new JSONL lines.
+更多本地验证和排查说明见 [docs/development.md](docs/development.md)。
