@@ -882,6 +882,8 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
                 raw_duration = tool_use_result.get("durationSeconds")
                 if isinstance(raw_duration, (int, float)) and raw_duration >= 0:
                     duration_seconds = float(raw_duration)
+                elif isinstance(tool_use_result.get("durationMs"), (int, float)) and tool_use_result.get("durationMs") >= 0:
+                    duration_seconds = float(tool_use_result.get("durationMs")) / 1000.0
             for result in iter_tool_results(get_content(msg)):
                 tool_id = result.get("tool_use_id")
                 if tool_id:
@@ -970,6 +972,16 @@ def turn_end_time(turn: Turn) -> Optional[datetime]:
     candidates = [parse_ts(msg) for msg in turn.assistant_msgs]
     for result in turn.tool_results_by_id.values():
         candidates.append(parse_ts(result))
+    valid = [item for item in candidates if item is not None]
+    return max(valid) if valid else None
+
+
+def latest_non_error_assistant_time(turn: Turn) -> Optional[datetime]:
+    candidates = [
+        parse_ts(msg)
+        for msg in turn.assistant_msgs
+        if not is_api_error_message(msg)
+    ]
     valid = [item for item in candidates if item is not None]
     return max(valid) if valid else None
 
@@ -1286,9 +1298,14 @@ def record_token_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str, Any
 def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], config: HookConfig, session_id: str, turn_num: int, turn: Turn, transcript_path: Path) -> None:
     user_text, user_meta = truncate_text(extract_text(get_content(turn.user_msg)), config.max_chars)
     user_ts = parse_ts(turn.user_msg)
-    turn_end_ts = add_duration(user_ts, milliseconds=turn.turn_duration_ms)
+    recorded_turn_end_ts = add_duration(user_ts, milliseconds=turn.turn_duration_ms)
     observed_end_ts = turn_end_time(turn)
-    end_ts = turn_end_ts or observed_end_ts or user_ts
+    latest_assistant_ts = latest_non_error_assistant_time(turn)
+    if recorded_turn_end_ts or latest_assistant_ts:
+        end_candidates = [ts for ts in (recorded_turn_end_ts, latest_assistant_ts, user_ts) if ts is not None]
+    else:
+        end_candidates = [ts for ts in (observed_end_ts, user_ts) if ts is not None]
+    end_ts = max(end_candidates) if end_candidates else None
     cwd = turn.user_msg.get("cwd")
     git_branch = turn.user_msg.get("gitBranch")
     run_id = f"{session_id}:turn:{turn_num}"
@@ -1513,7 +1530,9 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             turn_num=turn_num,
             user_ts=user_ts.isoformat() if user_ts else None,
             observed_end_ts=observed_end_ts.isoformat() if observed_end_ts else None,
+            latest_assistant_ts=latest_assistant_ts.isoformat() if latest_assistant_ts else None,
             recorded_turn_duration_ms=turn.turn_duration_ms,
+            recorded_turn_end_ts=recorded_turn_end_ts.isoformat() if recorded_turn_end_ts else None,
             chosen_end_ts=end_ts.isoformat() if end_ts else None,
             root_duration_ms=duration_ms(user_ts, end_ts or user_ts),
             assistant_count=len(turn.assistant_msgs),

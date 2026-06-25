@@ -219,6 +219,55 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(turns[0].turn_duration_ms, 21840)
         self.assertEqual(turns[0].tool_results_by_id["tool-1"]["duration_seconds"], 15.4)
 
+    def test_build_turns_reads_tool_duration_ms_when_seconds_missing(self):
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T07:54:15.018Z",
+                "message": {"content": "today weather"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T07:58:50.792Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "WebFetch", "input": {"url": "https://example.com"}},
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T07:59:39.935Z",
+                "toolUseResult": {"durationMs": 3926},
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"},
+                    ]
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T07:59:44.713Z",
+                "message": {
+                    "id": "msg-2",
+                    "model": "claude-test",
+                    "content": [{"type": "text", "text": "summary"}],
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 144338,
+            },
+        ]
+
+        turns = hook.build_turns(messages)
+
+        self.assertEqual(len(turns), 1)
+        self.assertAlmostEqual(turns[0].tool_results_by_id["tool-1"]["duration_seconds"], 3.926)
+
     def test_build_turns_merges_repeated_assistant_snapshots_by_message_id(self):
         messages = [
             {
@@ -663,7 +712,7 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(len(assistant_spans), 2)
         self.assertGreater(assistant_spans[0].end_time - assistant_spans[0].start_time, 0)
         self.assertEqual(assistant_spans[1].end_time - assistant_spans[1].start_time, 0)
-        self.assertEqual((root.end_time - root.start_time) / 1_000_000_000, 48.448)
+        self.assertEqual((root.end_time - root.start_time) / 1_000_000_000, 60.096999936)
         self.assertEqual(
             json_attr(root.attributes, "gen_ai.input.messages"),
             [{"role": "user", "parts": [{"type": "text", "content": "today ai headlines"}]}],
@@ -703,6 +752,95 @@ class ClaudeOtelHookTest(unittest.TestCase):
             json_attr(llm_second.attributes, "gen_ai.output.messages"),
             [{"role": "assistant", "parts": [{"type": "text", "content": "summary"}]}],
         )
+
+    def test_emit_turn_keeps_final_llm_duration_when_recorded_turn_duration_is_too_short(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T07:54:15.018Z",
+                "message": {"role": "user", "content": "today weather"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T07:58:50.792Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "WebFetch", "input": {"url": "https://example.com"}},
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T07:59:39.935Z",
+                "toolUseResult": {"durationMs": 3926},
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"},
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T07:59:44.713Z",
+                "message": {
+                    "id": "msg-2",
+                    "model": "claude-test",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "summary"}],
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 144338,
+            },
+        ]
+
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+
+        hook.emit_turn(FakeTraceAPI, tracer, None, config, "session-1", 1, turn, Path("/tmp/session.jsonl"))
+
+        llm_spans = [span for span in tracer.spans if span.name == "llm"]
+        tool_span = next(span for span in tracer.spans if span.name == "tool:WebFetch")
+        final_llm = llm_spans[-1]
+        root = tracer.spans[0]
+
+        self.assertGreater(tool_span.end_time - tool_span.start_time, 0)
+        self.assertGreater(final_llm.end_time - final_llm.start_time, 0)
+        self.assertGreater(root.end_time - root.start_time, 144338000000)
 
     def test_metric_recorders_use_genai_semantic_tags(self):
         class FakeHistogram:
