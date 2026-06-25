@@ -564,6 +564,60 @@ def truncate_text(value: Any, max_chars: int) -> Tuple[str, Dict[str, Any]]:
     }
 
 
+def _content_block_key(block: Any) -> Tuple[str, str]:
+    if isinstance(block, str):
+        return ("str", block)
+    if not isinstance(block, dict):
+        return ("json", json.dumps(block, ensure_ascii=False, sort_keys=True))
+    block_type = str(block.get("type") or "")
+    if block_type == "tool_use":
+        return (block_type, str(block.get("id") or ""))
+    if block_type in {"text", "input_text", "output_text"}:
+        return (block_type, str(block.get("text") or ""))
+    return (block_type, json.dumps(block, ensure_ascii=False, sort_keys=True))
+
+
+def merge_content(existing: Any, incoming: Any) -> Any:
+    if isinstance(existing, list) and isinstance(incoming, list):
+        merged: List[Any] = []
+        seen = set()
+        for block in existing + incoming:
+            key = _content_block_key(block)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(block)
+        return merged
+    if incoming not in (None, "", []):
+        return incoming
+    return existing
+
+
+def merge_assistant_message(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+
+    existing_ts = parse_ts(existing)
+    incoming_ts = parse_ts(incoming)
+    if existing_ts is None and incoming_ts is not None:
+        merged["timestamp"] = incoming["timestamp"]
+    elif existing_ts is not None and incoming_ts is not None and incoming_ts < existing_ts:
+        merged["timestamp"] = incoming["timestamp"]
+
+    for key, value in incoming.items():
+        if key == "message" and isinstance(value, dict):
+            current_msg = dict(merged.get("message") or {})
+            incoming_msg = value
+            for nested_key, nested_value in incoming_msg.items():
+                if nested_key == "content":
+                    current_msg["content"] = merge_content(current_msg.get("content"), nested_value)
+                elif nested_value not in (None, ""):
+                    current_msg[nested_key] = nested_value
+            merged["message"] = current_msg
+        elif value not in (None, "") and key != "timestamp":
+            merged[key] = value
+    return merged
+
+
 def parse_ts(value: Any) -> Optional[datetime]:
     if isinstance(value, dict):
         value = value.get("timestamp")
@@ -772,7 +826,9 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
             msg_id = get_message_id(msg) or f"noid:{len(assistant_order)}"
             if msg_id not in assistant_latest:
                 assistant_order.append(msg_id)
-            assistant_latest[msg_id] = msg
+                assistant_latest[msg_id] = msg
+            else:
+                assistant_latest[msg_id] = merge_assistant_message(assistant_latest[msg_id], msg)
 
     flush()
     return turns
@@ -1143,7 +1199,8 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     user_text, user_meta = truncate_text(extract_text(get_content(turn.user_msg)), config.max_chars)
     user_ts = parse_ts(turn.user_msg)
     turn_end_ts = add_duration(user_ts, milliseconds=turn.turn_duration_ms)
-    end_ts = turn_end_ts or turn_end_time(turn) or user_ts
+    observed_end_ts = turn_end_time(turn)
+    end_ts = turn_end_ts or observed_end_ts or user_ts
     cwd = turn.user_msg.get("cwd")
     git_branch = turn.user_msg.get("gitBranch")
     run_id = f"{session_id}:turn:{turn_num}"
@@ -1339,6 +1396,21 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
 
     root.end(end_time=to_ns(end_ts or user_ts))
     record_request_metrics(metrics, root_attrs, duration_s(user_ts, end_ts or user_ts))
+    if config.debug:
+        log(
+            config,
+            logging.DEBUG,
+            "turn timing",
+            session_id=session_id,
+            turn_num=turn_num,
+            user_ts=user_ts.isoformat() if user_ts else None,
+            observed_end_ts=observed_end_ts.isoformat() if observed_end_ts else None,
+            recorded_turn_duration_ms=turn.turn_duration_ms,
+            chosen_end_ts=end_ts.isoformat() if end_ts else None,
+            root_duration_ms=duration_ms(user_ts, end_ts or user_ts),
+            assistant_count=len(turn.assistant_msgs),
+            tool_count=tool_count,
+        )
 
 
 def flush_provider(provider: Any, timeout_ms: int) -> None:

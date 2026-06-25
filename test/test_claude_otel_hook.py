@@ -215,6 +215,61 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(turns[0].turn_duration_ms, 21840)
         self.assertEqual(turns[0].tool_results_by_id["tool-1"]["duration_seconds"], 15.4)
 
+    def test_build_turns_merges_repeated_assistant_snapshots_by_message_id(self):
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T06:41:36.000Z",
+                "message": {"role": "user", "content": "today ai headlines"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.195Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "I'll search for today's top AI news."}],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.205Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "WebSearch", "input": {"query": "AI news June 25 2026"}},
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.227Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-2", "name": "WebSearch", "input": {"query": "artificial intelligence headlines today"}},
+                    ],
+                },
+            },
+        ]
+
+        turns = hook.build_turns(messages)
+
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(len(turns[0].assistant_msgs), 1)
+        merged = turns[0].assistant_msgs[0]
+        self.assertEqual(hook.extract_text(hook.get_content(merged)), "I'll search for today's top AI news.")
+        self.assertEqual(
+            [block["id"] for block in hook.iter_tool_uses(hook.get_content(merged))],
+            ["tool-1", "tool-2"],
+        )
+        self.assertEqual(merged["timestamp"], "2026-06-25T06:41:42.195Z")
+
     def test_usage_details_matches_genai_token_accounting(self):
         details = hook.usage_details(
             {
@@ -448,6 +503,145 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual((tool.end_time - tool.start_time) / 1_000_000_000, 15)
         self.assertEqual(error_llm.attributes["status"], "error")
         self.assertLessEqual((error_llm.end_time - error_llm.start_time) / 1_000_000_000, 6)
+
+    def test_emit_turn_produces_positive_durations_for_realistic_tool_turn(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T06:41:36.000Z",
+                "cwd": "/home/liurui/.claude",
+                "gitBranch": "HEAD",
+                "message": {"role": "user", "content": "today ai headlines"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.195Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "I'll search for today's top AI news."}],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.205Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "WebSearch", "input": {"query": "AI news June 25 2026"}},
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:41:42.227Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-2", "name": "WebSearch", "input": {"query": "artificial intelligence headlines today"}},
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T06:42:10.272Z",
+                "toolUseResult": {"durationSeconds": 14.614211645999996},
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-2", "content": "news result 2"},
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T06:42:15.328Z",
+                "toolUseResult": {"durationSeconds": 18.989059140000005},
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "news result 1"},
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T06:42:36.097Z",
+                "message": {
+                    "id": "msg-3",
+                    "model": "claude-opus-4-8",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "summary"}],
+                    "usage": {
+                        "input_tokens": 1293,
+                        "cache_creation_input_tokens": 4486,
+                        "cache_read_input_tokens": 32344,
+                        "output_tokens": 1356,
+                    },
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 48448,
+            },
+        ]
+
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+
+        hook.emit_turn(FakeTraceAPI, tracer, None, config, "session-1", 1, turn, Path("/tmp/session.jsonl"))
+
+        by_name = {}
+        for span in tracer.spans:
+            by_name.setdefault(span.name, []).append(span)
+        root = by_name["invoke_agent"][0]
+        llm_first, llm_second = by_name["llm"]
+        tool_first, tool_second = by_name["tool:WebSearch"]
+        assistant_spans = by_name["assistant"]
+
+        self.assertGreater(root.end_time - root.start_time, 0)
+        self.assertGreater(llm_first.end_time - llm_first.start_time, 0)
+        self.assertGreater(tool_first.end_time - tool_first.start_time, 0)
+        self.assertGreater(llm_second.end_time - llm_second.start_time, 0)
+        self.assertGreater(tool_second.end_time - tool_second.start_time, 0)
+        self.assertEqual(len(assistant_spans), 2)
+        self.assertGreater(assistant_spans[0].end_time - assistant_spans[0].start_time, 0)
+        self.assertEqual(assistant_spans[1].end_time - assistant_spans[1].start_time, 0)
+        self.assertEqual((root.end_time - root.start_time) / 1_000_000_000, 48.448)
 
     def test_metric_recorders_use_genai_semantic_tags(self):
         class FakeHistogram:
