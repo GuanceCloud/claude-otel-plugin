@@ -210,6 +210,46 @@ class RuntimeMetadata:
     host: Optional[str]
 
 
+@dataclass
+class TraceExportTracker:
+    export_calls: int = 0
+    had_failure: bool = False
+    last_result: Optional[str] = None
+    last_error: Optional[str] = None
+
+    def export_ok(self, emitted: int) -> bool:
+        if emitted <= 0:
+            return True
+        return self.export_calls > 0 and not self.had_failure
+
+
+class TrackingSpanExporter:
+    def __init__(self, exporter: Any, tracker: TraceExportTracker):
+        self._exporter = exporter
+        self._tracker = tracker
+
+    def export(self, spans: Any) -> Any:
+        self._tracker.export_calls += 1
+        try:
+            result = self._exporter.export(spans)
+        except Exception as exc:
+            self._tracker.had_failure = True
+            self._tracker.last_error = f"{type(exc).__name__}: {exc}"
+            raise
+        self._tracker.last_result = getattr(result, "name", str(result))
+        if self._tracker.last_result != "SUCCESS":
+            self._tracker.had_failure = True
+        return result
+
+    def force_flush(self, timeout_millis: int = 30_000) -> Any:
+        if hasattr(self._exporter, "force_flush"):
+            return self._exporter.force_flush(timeout_millis=timeout_millis)
+        return True
+
+    def shutdown(self) -> Any:
+        return self._exporter.shutdown()
+
+
 def resolve_config(
     *,
     env: Optional[Dict[str, str]] = None,
@@ -1043,10 +1083,14 @@ def import_otel() -> Any:
 
 def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
     trace, OTLPSpanExporter, _, Resource, TracerProvider, BatchSpanProcessor, _, _, _, _ = import_otel()
-    exporter = OTLPSpanExporter(
-        endpoint=config.trace_url,
-        headers=config.headers,
-        timeout=max(1, config.timeout_ms / 1000),
+    tracker = TraceExportTracker()
+    exporter = TrackingSpanExporter(
+        OTLPSpanExporter(
+            endpoint=config.trace_url,
+            headers=config.headers,
+            timeout=max(1, config.timeout_ms / 1000),
+        ),
+        tracker,
     )
     resource = Resource.create(runtime_resource_attributes(config, runtime))
     provider = TracerProvider(resource=resource)
@@ -1058,7 +1102,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.9")
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.9"), tracker
 
 
 @dataclass
@@ -1540,20 +1584,29 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
         )
 
 
-def flush_provider(provider: Any, timeout_ms: int) -> None:
+def flush_provider(provider: Any, timeout_ms: int) -> bool:
+    outcome = {"force_flush": True, "shutdown": True}
+
     def run() -> None:
         try:
-            provider.force_flush(timeout_millis=timeout_ms)
+            result = provider.force_flush(timeout_millis=timeout_ms)
+            if result is False:
+                outcome["force_flush"] = False
         except Exception:
-            pass
+            outcome["force_flush"] = False
         try:
-            provider.shutdown()
+            result = provider.shutdown()
+            if result is False:
+                outcome["shutdown"] = False
         except Exception:
-            pass
+            outcome["shutdown"] = False
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     thread.join(max(1.0, timeout_ms / 1000))
+    if thread.is_alive():
+        return False
+    return outcome["force_flush"] and outcome["shutdown"]
 
 
 def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> int:
@@ -1578,9 +1631,11 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
 
     trace_api = None
     provider = None
+    trace_tracker = None
     tracer = None
     metrics = None
     emitted = 0
+    provider_flushed = False
     try:
         with FileLock(LOCK_FILE):
             global_state = load_state()
@@ -1595,7 +1650,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
             runtime = extract_runtime_metadata(messages, payload)
             if provider is None:
                 try:
-                    trace_api, provider, tracer = create_tracer_provider(config, runtime)
+                    trace_api, provider, tracer, trace_tracker = create_tracer_provider(config, runtime)
                     metrics = create_metrics_provider(config, runtime)
                 except Exception as exc:
                     log(config, logging.INFO, "opentelemetry unavailable", error=str(exc))
@@ -1605,6 +1660,25 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
             for turn in turns:
                 emitted += 1
                 emit_turn(trace_api, tracer, metrics, config, session_id, session_state.turn_count + emitted, turn, transcript_path)
+
+            if provider is not None:
+                provider_flushed = True
+                trace_flush_ok = flush_provider(provider, config.timeout_ms)
+                trace_export_ok = trace_tracker.export_ok(emitted) if trace_tracker else trace_flush_ok
+                if not trace_flush_ok or not trace_export_ok:
+                    log(
+                        config,
+                        logging.INFO,
+                        "trace export failed",
+                        emitted=emitted,
+                        transcript_path=str(transcript_path),
+                        trace_url=config.trace_url,
+                        export_calls=trace_tracker.export_calls if trace_tracker else None,
+                        export_result=trace_tracker.last_result if trace_tracker else None,
+                        export_error=trace_tracker.last_error if trace_tracker else None,
+                        flush_ok=trace_flush_ok,
+                    )
+                    return 0
 
             session_state.turn_count += emitted
             write_session_state(global_state, key, session_state)
@@ -1616,7 +1690,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
         log(config, logging.INFO, "collection failed", error=f"{type(exc).__name__}: {exc}")
         return 0
     finally:
-        if provider is not None:
+        if provider is not None and not provider_flushed:
             flush_provider(provider, config.timeout_ms)
         if metrics:
             flush_provider(metrics.provider, config.timeout_ms)

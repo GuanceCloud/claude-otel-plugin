@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -896,6 +897,36 @@ class ClaudeOtelHookTest(unittest.TestCase):
         status = hook.run(payload, env={})
 
         self.assertEqual(status, 0)
+
+    def test_run_does_not_advance_state_when_trace_flush_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text('{"type":"user"}\n', encoding="utf-8")
+            payload = json.dumps({"session_id": "s1", "transcript_path": str(transcript)})
+            saved_states = []
+
+            class FakeProvider:
+                pass
+
+            with mock.patch.object(hook, "FileLock"), \
+                mock.patch.object(hook, "load_state", return_value={}), \
+                mock.patch.object(hook, "save_state", side_effect=lambda state: saved_states.append(state.copy())), \
+                mock.patch.object(hook, "read_new_jsonl", return_value=([{"version": "2.1.191"}], hook.SessionState(offset=12))), \
+                mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
+                mock.patch.object(hook, "create_metrics_provider", return_value=None), \
+                mock.patch.object(hook, "build_turns", return_value=[object()]), \
+                mock.patch.object(hook, "emit_turn"), \
+                mock.patch.object(hook, "flush_provider", return_value=False):
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(saved_states, [])
 
 
 if __name__ == "__main__":
