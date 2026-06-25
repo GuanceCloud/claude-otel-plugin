@@ -1,0 +1,67 @@
+{
+  "name": "claude-otel-plugin",
+  "description": "Export Claude Code sessions as OpenTelemetry traces",
+  "version": "0.1.9",
+  "author": {
+    "name": "Guance"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "CLAUDE_OTEL_ENABLED": {
+      "type": "boolean",
+      "title": "Enable tracing",
+      "description": "Enable Claude Code OTLP trace export.",
+      "default": true
+    },
+    "OTEL_EXPORTER_OTLP_ENDPOINT": {
+      "type": "string",
+      "title": "OTLP endpoint",
+      "description": "Base OTLP HTTP endpoint. The trace path is appended unless a traces URL is configured."
+    },
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": {
+      "type": "string",
+      "title": "OTLP traces endpoint",
+      "description": "Full OTLP HTTP traces endpoint. Overrides endpoint + trace path."
+    },
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": {
+      "type": "string",
+      "title": "OTLP metrics endpoint",
+      "description": "Full OTLP HTTP metrics endpoint. Overrides endpoint + metrics path."
+    },
+    "OTEL_EXPORTER_OTLP_HEADERS": {
+      "type": "string",
+      "title": "OTLP headers",
+      "description": "Headers as KEY=VALUE pairs or a JSON object.",
+      "sensitive": true
+    },
+    "CLAUDE_OTEL_TRACE_PATH": {
+      "type": "string",
+      "title": "Trace path",
+      "description": "Path appended to the endpoint when no full traces endpoint is set.",
+      "default": "v1/traces"
+    },
+    "CLAUDE_OTEL_METRICS_PATH": {
+      "type": "string",
+      "title": "Metrics path",
+      "description": "Path appended to the endpoint when no full metrics endpoint is set.",
+      "default": "v1/metrics"
+    },
+    "CLAUDE_OTEL_RESOURCE_ATTRIBUTES": {
+      "type": "string",
+      "title": "Resource attributes",
+      "description": "JSON object or comma-separated KEY=VALUE resource attributes."
+    },
+    "CLAUDE_OTEL_DEBUG": {
+      "type": "boolean",
+      "title": "Debug logging",
+      "description": "Write verbose hook logs to ~/.claude/state/claude_otel_hook.log.",
+      "default": false
+    },
+    "CLAUDE_OTEL_MAX_CHARS": {
+      "type": "number",
+      "title": "Max captured characters",
+      "description": "Truncate captured inputs and outputs to this many characters.",
+      "default": 20000
+    }
+  }
+}

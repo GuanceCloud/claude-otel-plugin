@@ -1,0 +1,14 @@
+{
+  "name": "claude-otel-plugin",
+  "description": "Local Claude Code OpenTelemetry plugins",
+  "owner": {
+    "name": "Guance"
+  },
+  "plugins": [
+    {
+      "name": "claude-otel-plugin",
+      "source": "./",
+      "description": "Export Claude Code sessions as OpenTelemetry traces"
+    }
+  ]
+}
