@@ -270,7 +270,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.1",
+            "telemetry.sdk.version": "0.1.2",
             "agent_runtime": "claude-code",
             "agent_source": "claude-code",
             "agent_type": "assistant",
@@ -479,16 +479,25 @@ class SessionState:
     offset: int = 0
     buffer: str = ""
     turn_count: int = 0
+    pending_messages: List[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if self.pending_messages is None:
+            self.pending_messages = []
 
 
 def load_session_state(global_state: Dict[str, Any], key: str) -> SessionState:
     raw = global_state.get(key, {})
     if not isinstance(raw, dict):
         raw = {}
+    pending_messages = raw.get("pending_messages")
+    if not isinstance(pending_messages, list):
+        pending_messages = []
     return SessionState(
         offset=parse_int(raw.get("offset"), 0),
         buffer=str(raw.get("buffer") or ""),
         turn_count=parse_int(raw.get("turn_count"), 0),
+        pending_messages=[item for item in pending_messages if isinstance(item, dict)],
     )
 
 
@@ -497,6 +506,7 @@ def write_session_state(global_state: Dict[str, Any], key: str, state: SessionSt
         "offset": state.offset,
         "buffer": state.buffer,
         "turn_count": state.turn_count,
+        "pending_messages": state.pending_messages,
         "updated": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -883,9 +893,10 @@ class Turn:
     turn_duration_ms: Optional[float] = None
 
 
-def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
+def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) -> Tuple[List[Turn], List[Dict[str, Any]]]:
     turns: List[Turn] = []
     current_user: Optional[Dict[str, Any]] = None
+    current_turn_messages: List[Dict[str, Any]] = []
     assistant_order: List[str] = []
     assistant_latest: Dict[str, Dict[str, Any]] = {}
     tool_results_by_id: Dict[str, Dict[str, Any]] = {}
@@ -907,6 +918,14 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
         )
 
     for msg in messages:
+        if current_user is not None and (
+            msg.get("isMeta")
+            or is_tool_result_message(msg)
+            or (msg.get("type") == "system" and msg.get("subtype") == "turn_duration")
+            or get_role(msg) == "assistant"
+        ):
+            current_turn_messages.append(msg)
+
         if msg.get("isMeta"):
             source_tool_id = msg.get("sourceToolUseID")
             text = extract_text(get_content(msg))
@@ -945,6 +964,7 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
         if role == "user":
             flush()
             current_user = msg
+            current_turn_messages = [msg]
             assistant_order = []
             assistant_latest = {}
             tool_results_by_id = {}
@@ -960,7 +980,21 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
             else:
                 assistant_latest[msg_id] = merge_assistant_message(assistant_latest[msg_id], msg)
 
-    flush()
+    pending_messages: List[Dict[str, Any]] = []
+    if current_user is not None:
+        if keep_incomplete_tail and turn_duration_ms is None:
+            pending_messages = list(current_turn_messages)
+        else:
+            flush()
+    return turns, pending_messages
+
+
+def build_turns_with_pending(messages: List[Dict[str, Any]]) -> Tuple[List[Turn], List[Dict[str, Any]]]:
+    return _build_turns(messages, keep_incomplete_tail=True)
+
+
+def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
+    turns, _ = _build_turns(messages, keep_incomplete_tail=False)
     return turns
 
 
@@ -1102,7 +1136,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.1"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.2"), tracker
 
 
 @dataclass
@@ -1151,7 +1185,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.1")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.2")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1642,12 +1676,13 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
             key = state_key(session_id, str(transcript_path))
             session_state = load_session_state(global_state, key)
             messages, session_state = read_new_jsonl(transcript_path, session_state)
-            if not messages:
+            combined_messages = list(session_state.pending_messages) + messages
+            if not combined_messages:
                 write_session_state(global_state, key, session_state)
                 save_state(global_state)
                 return 0
 
-            runtime = extract_runtime_metadata(messages, payload)
+            runtime = extract_runtime_metadata(combined_messages, payload)
             if provider is None:
                 try:
                     trace_api, provider, tracer, trace_tracker = create_tracer_provider(config, runtime)
@@ -1656,7 +1691,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                     log(config, logging.INFO, "opentelemetry unavailable", error=str(exc))
                     return 0
 
-            turns = build_turns(messages)
+            turns, pending_messages = build_turns_with_pending(combined_messages)
             for turn in turns:
                 emitted += 1
                 emit_turn(trace_api, tracer, metrics, config, session_id, session_state.turn_count + emitted, turn, transcript_path)
@@ -1681,6 +1716,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                     return 0
 
             session_state.turn_count += emitted
+            session_state.pending_messages = pending_messages
             write_session_state(global_state, key, session_state)
             save_state(global_state)
     except TimeoutError as exc:

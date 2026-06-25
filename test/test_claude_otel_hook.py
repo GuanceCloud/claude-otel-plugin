@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import json
 import os
@@ -268,6 +269,39 @@ class ClaudeOtelHookTest(unittest.TestCase):
 
         self.assertEqual(len(turns), 1)
         self.assertAlmostEqual(turns[0].tool_results_by_id["tool-1"]["duration_seconds"], 3.926)
+
+    def test_build_turns_with_pending_defers_trailing_incomplete_turn(self):
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-25T09:18:25.498Z",
+                "message": {"content": "today weather"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-25T09:18:26.978Z",
+                "isApiErrorMessage": True,
+                "apiErrorStatus": 403,
+                "message": {
+                    "id": "msg-1",
+                    "model": "<synthetic>",
+                    "content": [{"type": "text", "text": "API Error: 403 insufficient balance"}],
+                },
+            },
+        ]
+
+        turns, pending_messages = hook.build_turns_with_pending(messages)
+
+        self.assertEqual(turns, [])
+        self.assertEqual(pending_messages, messages)
+
+        turns, pending_messages = hook.build_turns_with_pending(
+            messages + [{"type": "system", "subtype": "turn_duration", "durationMs": 1447}]
+        )
+
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0].turn_duration_ms, 1447)
+        self.assertEqual(pending_messages, [])
 
     def test_build_turns_merges_repeated_assistant_snapshots_by_message_id(self):
         messages = [
@@ -914,7 +948,7 @@ class ClaudeOtelHookTest(unittest.TestCase):
                 mock.patch.object(hook, "read_new_jsonl", return_value=([{"version": "2.1.191"}], hook.SessionState(offset=12))), \
                 mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
                 mock.patch.object(hook, "create_metrics_provider", return_value=None), \
-                mock.patch.object(hook, "build_turns", return_value=[object()]), \
+                mock.patch.object(hook, "build_turns_with_pending", return_value=([object()], [])), \
                 mock.patch.object(hook, "emit_turn"), \
                 mock.patch.object(hook, "flush_provider", return_value=False):
                 status = hook.run(
@@ -927,6 +961,90 @@ class ClaudeOtelHookTest(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(saved_states, [])
+
+    def test_run_buffers_incomplete_turn_until_duration_arrives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "user",
+                                "timestamp": "2026-06-25T09:18:25.498Z",
+                                "message": {"content": "today weather"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "timestamp": "2026-06-25T09:18:26.978Z",
+                                "isApiErrorMessage": True,
+                                "apiErrorStatus": 403,
+                                "message": {
+                                    "id": "msg-1",
+                                    "model": "<synthetic>",
+                                    "content": [{"type": "text", "text": "API Error: 403 insufficient balance"}],
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = json.dumps({"session_id": "s1", "transcript_path": str(transcript)})
+            persisted_state = {}
+
+            class FakeProvider:
+                pass
+
+            emitted_turns = []
+
+            def load_state():
+                return json.loads(json.dumps(persisted_state))
+
+            def save_state(state):
+                persisted_state.clear()
+                persisted_state.update(json.loads(json.dumps(state)))
+
+            with mock.patch.object(hook, "FileLock", side_effect=lambda *args, **kwargs: contextlib.nullcontext()), \
+                mock.patch.object(hook, "load_state", side_effect=load_state), \
+                mock.patch.object(hook, "save_state", side_effect=save_state), \
+                mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
+                mock.patch.object(hook, "create_metrics_provider", return_value=None), \
+                mock.patch.object(hook, "emit_turn", side_effect=lambda *args: emitted_turns.append(args[5])), \
+                mock.patch.object(hook, "flush_provider", return_value=True):
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+                self.assertEqual(status, 0)
+                self.assertEqual(emitted_turns, [])
+
+                key = hook.state_key("s1", str(transcript.resolve()))
+                self.assertEqual(persisted_state[key]["turn_count"], 0)
+                self.assertEqual(len(persisted_state[key]["pending_messages"]), 2)
+
+                with transcript.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"type": "system", "subtype": "turn_duration", "durationMs": 1447}) + "\n")
+
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(emitted_turns, [1])
+        self.assertEqual(persisted_state[key]["turn_count"], 1)
+        self.assertEqual(persisted_state[key]["pending_messages"], [])
 
 
 if __name__ == "__main__":
