@@ -1,50 +1,53 @@
 # claude-otel-plugin
 
-`claude-otel-plugin` 是一个 Claude Code OpenTelemetry 采集插件。它通过
-Claude Code `Stop` 和 `SessionEnd` hooks 读取 transcript JSONL，将 turn、
-模型生成、工具调用、工具结果和 token usage 转换为 OTLP Trace 与 Metrics，并
-通过 HTTP/protobuf 上报。
+`claude-otel-plugin` is an OpenTelemetry collection plugin for Claude Code. It
+reads Claude Code transcript JSONL from the `Stop` and `SessionEnd` hooks,
+converts turns, assistant generations, tool calls, tool results, and token usage
+into OTLP traces and metrics, then exports them over OTLP HTTP/protobuf.
 
-Hook 是 fail-open 设计：依赖缺失、配置缺失、解析失败或上报失败会写日志，但
-不会阻塞 Claude Code。
+The hook is fail-open: missing dependencies, missing config, parse errors, and
+upload failures are logged but do not block Claude Code.
 
-## 能力概览
+## Capabilities
 
-- 采集 Claude Code turn、assistant generation、tool call、tool result 和 token usage。
-- 生成 `invoke_agent`、`llm`、`assistant`、`tool:<name>` 四类 span。
-- 使用 OTLP Trace 与 Metrics HTTP/protobuf 上报。
-- Metrics 从同批 turn 数据派生，触发时机与 traces 相同。
-- 支持 Dataway/GTrace 风格的 `endpoint + tracePath + metricsPath + headers` 配置。
-- 支持 `~/.claude/gtrace.json`、项目 `.claude/gtrace.json` 和 OTLP 环境变量。
+- Collects Claude Code turns, assistant generations, tool calls, tool results,
+  and token usage.
+- Generates `invoke_agent`, `llm`, `assistant`, and `tool:<name>` spans.
+- Exports OTLP traces and metrics over HTTP/protobuf.
+- Derives metrics from the same turn data as traces.
+- Supports Dataway/GTrace-style `endpoint + tracePath + metricsPath + headers`
+  configuration.
+- Supports `~/.claude/gtrace.json`, project `.claude/gtrace.json`, and OTLP
+  environment variables.
 
-## 工作流程
+## Flow
 
 ```text
 Claude Code Stop / SessionEnd hook
     |
     v
-hooks/claude_otel_hook.py 读取 transcript JSONL
+hooks/claude_otel_hook.py reads transcript JSONL
     |
     v
-解析 turn、模型调用、工具调用和 usage
+parse turns, model calls, tool calls, and usage
     |
     v
-生成 OTLP traces 与 metrics
+build OTLP traces and metrics
     |
     v
 POST <endpoint>/<tracePath>
 POST <endpoint>/<metricsPath>
 ```
 
-## 快速开始
+## Quick Start
 
-要求：
+Requirements:
 
 - Claude Code with plugin support
 - Python 3.10+
-- 推荐安装 `uv`
+- `uv` recommended
 
-在 Claude Code 中添加 marketplace 并安装插件：
+Add the marketplace and install the plugin from inside Claude Code:
 
 ```text
 /plugin marketplace add GuanceCloud/claude-otel-plugin
@@ -52,7 +55,7 @@ POST <endpoint>/<metricsPath>
 /reload-plugins
 ```
 
-写入上报配置：
+Write the export config:
 
 ```bash
 mkdir -p ~/.claude
@@ -70,37 +73,39 @@ cat > ~/.claude/gtrace.json <<'JSON'
 JSON
 ```
 
-安装完成后重启 Claude Code，或执行 `/reload-plugins`。
+Restart Claude Code, or run `/reload-plugins`.
 
-更多安装、升级、卸载和依赖说明见 [docs/install.md](docs/install.md)。
+For installation, upgrade, uninstall, and dependency details, see
+[docs/install.md](docs/install.md).
 
-## 文档导航
+## Documentation
 
-| 文档 | 说明 |
+| Document | Description |
 | --- | --- |
-| [docs/install.md](docs/install.md) | 安装、升级、卸载、依赖和本地安装 |
-| [docs/configuration.md](docs/configuration.md) | 配置读取顺序、GTrace 配置、环境变量和 resource attributes |
-| [docs/traces.md](docs/traces.md) | Trace/span 结构、字段命名、token 口径和字段迁移 |
-| [docs/metrics.md](docs/metrics.md) | Metrics 指标体系、tag 和旧指标迁移 |
-| [docs/development.md](docs/development.md) | 本地验证、日志、状态文件和排查方式 |
+| [docs/install.md](docs/install.md) | Installation, upgrade, uninstall, dependencies, and local install |
+| [docs/configuration.md](docs/configuration.md) | Config precedence, GTrace config, environment variables, and resource attributes |
+| [docs/traces.md](docs/traces.md) | Trace/span shape, field names, token semantics, and field migration |
+| [docs/metrics.md](docs/metrics.md) | Metrics, tags, and metric migration |
+| [docs/development.md](docs/development.md) | Local validation, logs, state files, and troubleshooting |
 
-## 数据模型
+## Data Model
 
-Trace 字段、span name、tool call/result、token 口径和旧字段迁移关系见
-[docs/traces.md](docs/traces.md)。
+Trace fields, span names, tool call/result attributes, token semantics, and
+field migration details are documented in [docs/traces.md](docs/traces.md).
 
-Metrics 指标体系、tag 设计和旧指标迁移关系见
-[docs/metrics.md](docs/metrics.md)。
+Metrics, tag design, and metric migration details are documented in
+[docs/metrics.md](docs/metrics.md).
 
-当前 Metrics 只从当前 turn 数据派生以下 OpenTelemetry GenAI 指标：
+Current metrics are derived from the current turn data and use these
+OpenTelemetry GenAI metric names:
 
 - `gen_ai.workflow.duration`
 - `gen_ai.client.operation.duration`
 - `gen_ai.client.token.usage`
 
-## 开发
+## Development
 
-常用命令：
+Common commands:
 
 ```bash
 python3 -m unittest discover -s test
@@ -108,4 +113,4 @@ python3 -m py_compile hooks/claude_otel_hook.py
 claude plugin validate .
 ```
 
-更多本地验证和排查说明见 [docs/development.md](docs/development.md)。
+For local validation and troubleshooting, see [docs/development.md](docs/development.md).

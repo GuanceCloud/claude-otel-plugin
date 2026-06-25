@@ -1,16 +1,16 @@
-# Trace 说明
+# Traces
 
-本文档说明 `claude-otel-plugin` 的 trace/span 结构、关键字段、token 口径和旧字段迁移。
+This document covers the trace/span shape, key attributes, token semantics, and
+field migration for `claude-otel-plugin`.
 
-## Span 结构
+## Span Shape
 
-每个完成的 Claude Code turn 会保留现有 span tree 形态，并使用
-OpenTelemetry GenAI semantic conventions 命名 span attributes。API error turn
-会标记为 `status=error`。
+Each completed Claude Code turn keeps the existing span tree shape, while span
+attributes follow OpenTelemetry GenAI semantic conventions. API error turns are
+marked as `status=error`.
 
-当 Claude transcript 中存在 `turn_duration` 或
-`toolUseResult.durationSeconds` 时，hook 优先使用这些值，而不是延迟写入的
-transcript timestamp。
+When Claude records `turn_duration` or `toolUseResult.durationSeconds`, those
+values are preferred over delayed transcript timestamps.
 
 ```text
 invoke_agent
@@ -20,10 +20,10 @@ invoke_agent
   llm
 ```
 
-## 关键字段
+## Key Attributes
 
 - `gen_ai.conversation.id`
-- `session_id`，用于兼容现有 dashboard
+- `session_id`, kept for compatibility with existing dashboards
 - `gen_ai.agent.name=claude-code`
 - `gen_ai.agent.version`
 - `gen_ai.operation.name=invoke_agent|chat|execute_tool`
@@ -52,24 +52,25 @@ invoke_agent
 - `host`
 - `host.name`
 
-`host` 和 `host.name` 同时写入 resource 和 metric attributes。
+`host` and `host.name` are written to resource and metric attributes.
 
-## Token 口径
+## Token Semantics
 
-`gen_ai.usage.input_tokens` 使用 OpenTelemetry GenAI 语义：表示完整输入 token。
-当 Claude 上报 cache read 和 cache creation token 时，这些 token 会包含在完整
-input tokens 中。
+`gen_ai.usage.input_tokens` uses the OpenTelemetry GenAI meaning: full input
+tokens. When Claude reports cache read and cache creation tokens, those tokens
+are included in the full input token count.
 
-缓存相关字段单独保留：
+Cache-specific fields are still preserved:
 
 - `gen_ai.usage.cache_read.input_tokens`
 - `gen_ai.usage.cache_creation.input_tokens`
 
-不再单独输出 total/cache total/context total 这类可派生字段。
+Total, cache total, and context total fields are not emitted because they can be
+derived or duplicate another source.
 
-## Tool 字段
+## Tool Attributes
 
-Tool call span 使用：
+Tool call spans use:
 
 - `gen_ai.operation.name=execute_tool`
 - `gen_ai.tool.name`
@@ -77,25 +78,25 @@ Tool call span 使用：
 - `gen_ai.tool.call.arguments`
 - `gen_ai.tool.call.result`
 
-为了避免采集内容过长，arguments 和 result 会受 `max_chars` 限制。
+Arguments and results are truncated by `max_chars`.
 
-## 字段迁移
+## Field Migration
 
-| 旧字段 | 新字段 / 行为 |
+| Previous field | New field / behavior |
 | --- | --- |
-| `session_id` | 保留，并复制到 `gen_ai.conversation.id` |
+| `session_id` | Kept and also copied to `gen_ai.conversation.id` |
 | `session_agent` | `gen_ai.agent.name` |
 | `agent_version` | `gen_ai.agent.version` |
 | `provider_name` | `gen_ai.provider.name` |
-| `model_name` | `gen_ai.request.model`、`gen_ai.response.model` |
+| `model_name` | `gen_ai.request.model`, `gen_ai.response.model` |
 | `usage_input_tokens` | `gen_ai.usage.input_tokens` |
 | `usage_output_tokens` | `gen_ai.usage.output_tokens` |
-| `usage_total_tokens` | 移除；需要时由 input + output 派生 |
+| `usage_total_tokens` | Removed; derive from input + output if needed |
 | `usage_cache_read_input_tokens` | `gen_ai.usage.cache_read.input_tokens` |
 | `usage_cache_creation_input_tokens` | `gen_ai.usage.cache_creation.input_tokens` |
-| `usage_cache_total_tokens` | 移除；来源与 cache read 重复 |
-| `usage_context_input_tokens` | 移除；完整 input 使用 `gen_ai.usage.input_tokens` |
-| `usage_context_total_tokens` | 移除 |
+| `usage_cache_total_tokens` | Removed; same source as cache read |
+| `usage_context_input_tokens` | Removed; full input is `gen_ai.usage.input_tokens` |
+| `usage_context_total_tokens` | Removed |
 | `tool_name` | `gen_ai.tool.name` |
 | `tool_call_id` | `gen_ai.tool.call.id` |
 | `tool_args_preview` | `gen_ai.tool.call.arguments` |

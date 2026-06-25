@@ -1,21 +1,23 @@
-# 配置说明
+# Configuration
 
-本文档说明 `claude-otel-plugin` 的配置读取顺序、推荐配置、环境变量和
-`resourceAttributes` 约定。
+This document covers configuration precedence, recommended GTrace settings,
+environment variables, and `resourceAttributes` conventions.
 
-## 配置读取顺序
+## Config Precedence
 
-Hook 按以下顺序解析配置，后面的配置会覆盖前面的配置：
+The hook resolves config in this order, with later sources overriding earlier
+ones:
 
 1. Claude plugin `CLAUDE_PLUGIN_OPTION_*` values
-2. 全局 `~/.claude/gtrace.json`
-3. 当前项目 `.claude/gtrace.json`
-4. 普通环境变量
+2. Global `~/.claude/gtrace.json`
+3. Project `.claude/gtrace.json`
+4. Ordinary environment variables
 
-日常维护推荐使用 `~/.claude/gtrace.json`。Plugin userConfig 更适合作为首次
-安装时的 fallback，或用于 Claude Code 存储敏感配置。
+For day-to-day maintenance, prefer `~/.claude/gtrace.json`. Plugin userConfig is
+kept as a fallback for first-time install and for sensitive values stored by
+Claude Code.
 
-## 推荐 Dataway/GTrace 配置
+## Recommended Dataway/GTrace Config
 
 ```json
 {
@@ -38,12 +40,13 @@ Hook 按以下顺序解析配置，后面的配置会覆盖前面的配置：
 }
 ```
 
-不要把真实 token 写入仓库文件、测试 fixture 或文档示例。
+Do not commit real tokens in repository files, test fixtures, or documentation
+examples.
 
-当 `tracePath` 是 `v1/write/otel-llm` 且没有显式设置 metrics path 时，hook 会
-推断 metrics path 为 `v1/write/otel-metrics`。
+When `tracePath` is `v1/write/otel-llm` and no metrics path is explicitly set,
+the hook infers `v1/write/otel-metrics`.
 
-## 通用 OTLP 配置
+## Generic OTLP Config
 
 ```json
 {
@@ -64,9 +67,9 @@ Hook 按以下顺序解析配置，后面的配置会覆盖前面的配置：
 }
 ```
 
-## 环境变量
+## Environment Variables
 
-也可以使用标准 OTLP 风格环境变量：
+Standard OTLP-style environment variables are also supported:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
@@ -76,14 +79,14 @@ export OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer token'
 export OTEL_RESOURCE_ATTRIBUTES='service.name=claude-code,deployment.environment=dev'
 ```
 
-如果设置了 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 或
-`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`，它会覆盖 `endpoint + tracePath` 或
-`endpoint + metricsPath`。
+If `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is set, it overrides `endpoint + tracePath`
+or `endpoint + metricsPath`.
 
 ## Resource Attributes
 
-全局筛选类 tag 应放在 OTLP `resource.attributes`，trace 和 metrics 会共享同一
-批 `resourceAttributes`。推荐字段：
+Global filtering tags should be placed in OTLP `resource.attributes`. Traces and
+metrics share the same `resourceAttributes`. Recommended fields:
 
 - `service.name`
 - `host`
@@ -94,21 +97,22 @@ export OTEL_RESOURCE_ATTRIBUTES='service.name=claude-code,deployment.environment
 - `agent_type`
 - `agent_source`
 
-说明：
+Notes:
 
-- `host` 和 `host.name` 默认会自动采集当前宿主机 hostname。
-- 不要把 `run_id`、真实用户输入或高基数一次性字段放进 `resourceAttributes`。
-- `resourceAttributes` 应用于 trace resource 和 metric attributes。
+- `host` and `host.name` default to the current hostname.
+- Do not put `run_id`, user input, or high-cardinality one-off fields in
+  `resourceAttributes`.
+- `resourceAttributes` are applied to trace resources and metric attributes.
 
-## 采集开关与调试
+## Switches and Debugging
 
-常用字段：
+Common fields:
 
-| 字段 | 说明 |
+| Field | Description |
 | --- | --- |
-| `enabled` | 是否启用上报 |
-| `debug` | 是否写详细 hook 日志 |
-| `timeout_ms` | OTLP HTTP 请求超时时间 |
-| `max_chars` | input/output/tool 参数和结果的最大采集字符数 |
+| `enabled` | Enable or disable export |
+| `debug` | Write verbose hook logs |
+| `timeout_ms` | OTLP HTTP request timeout |
+| `max_chars` | Maximum captured characters for input, output, tool args, and tool results |
 
-日志位置见 [development.md](development.md)。
+Log locations are documented in [development.md](development.md).

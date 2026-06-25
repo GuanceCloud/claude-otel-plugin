@@ -1,11 +1,12 @@
-# Metrics 说明
+# Metrics
 
-本文档说明 `claude-otel-plugin` 的 Metrics 指标体系、常用 tag、token 映射和旧指标迁移。
+This document covers metrics, common tags, token mapping, and metric migration
+for `claude-otel-plugin`.
 
-## 指标体系
+## Metric Set
 
-Metrics 从同一批解析后的 turn 数据派生，并使用 OpenTelemetry GenAI metric
-names：
+Metrics are derived from the same parsed turn data as traces and use
+OpenTelemetry GenAI metric names:
 
 | Metric | Type | Unit |
 | --- | --- | --- |
@@ -13,9 +14,9 @@ names：
 | `gen_ai.client.operation.duration` | Histogram | `s` |
 | `gen_ai.client.token.usage` | Histogram | `{token}` |
 
-## 常用 Tags
+## Common Tags
 
-通用 metric tags：
+Common metric tags:
 
 - `session_id`
 - `gen_ai.conversation.id`
@@ -26,43 +27,44 @@ names：
 - `host`
 - `host.name`
 
-Tool operation metrics 还会包含：
+Tool operation metrics also include:
 
 - `gen_ai.tool.name`
 - `tool_result_status`
 
-Token metrics 还会包含：
+Token metrics also include:
 
 - `gen_ai.token.type=input`
 - `gen_ai.token.type=output`
 
-## Token 指标
+## Token Metrics
 
-`gen_ai.client.token.usage` 当前只输出 input 和 output 两类 token usage。
+`gen_ai.client.token.usage` currently emits only input and output token usage.
 
-缓存 token 仍在 trace attributes 中保留，但不会作为独立的 `token_type` metric
-输出，避免 total/cache/context 口径重复。
+Cache tokens are still preserved in trace attributes, but they are not emitted
+as separate `token_type` metrics. This avoids duplicate total/cache/context
+token semantics.
 
-## 旧指标迁移
+## Metric Migration
 
-| 旧指标 / tag | 新指标 / tag |
+| Previous metric / tag | New metric / tag |
 | --- | --- |
-| `gen_ai.agent.request.count` | 移除 |
+| `gen_ai.agent.request.count` | Removed |
 | `gen_ai.agent.request.duration` | `gen_ai.workflow.duration` |
-| `gen_ai.agent.operation.count` | 移除 |
+| `gen_ai.agent.operation.count` | Removed |
 | `gen_ai.agent.operation.duration` | `gen_ai.client.operation.duration` |
 | `gen_ai.agent.token.usage` | `gen_ai.client.token.usage` |
 | duration unit `ms` | duration unit `s` |
-| `session_id` | 保留，并复制到 `gen_ai.conversation.id` |
+| `session_id` | Kept and also copied to `gen_ai.conversation.id` |
 | `provider_name` | `gen_ai.provider.name` |
-| `model_name` | `gen_ai.request.model`、`gen_ai.response.model` |
+| `model_name` | `gen_ai.request.model`, `gen_ai.response.model` |
 | `operation_name` | `gen_ai.operation.name` |
 | `tool_name` | `gen_ai.tool.name` |
 | `token_type` | `gen_ai.token.type` |
-| `token_type=total/cache_read/cache_total/reasoning` | 移除 |
+| `token_type=total/cache_read/cache_total/reasoning` | Removed |
 
 ## Resource Attributes
 
-全局筛选类 tag 建议通过 `resourceAttributes` 放在 OTLP
-`resource.attributes` 中，并由 trace 和 metrics 共用。配置方式见
-[configuration.md](configuration.md)。
+Global filtering tags should be placed in OTLP `resource.attributes` via
+`resourceAttributes`, then shared by traces and metrics. See
+[configuration.md](configuration.md).

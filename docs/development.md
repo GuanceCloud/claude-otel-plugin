@@ -1,8 +1,9 @@
-# 开发与调试
+# Development and Debugging
 
-本文档说明 `claude-otel-plugin` 的本地验证、日志、状态文件和排查方式。
+This document covers local validation, logs, state files, and troubleshooting
+for `claude-otel-plugin`.
 
-## 常用命令
+## Common Commands
 
 ```bash
 python3 -m unittest discover -s test
@@ -10,9 +11,10 @@ python3 -m py_compile hooks/claude_otel_hook.py
 claude plugin validate .
 ```
 
-当前测试覆盖 hook 解析、OTLP trace/metrics 生成、去重和错误处理等核心行为。
+The current tests cover hook parsing, OTLP trace/metric generation,
+deduplication, and error handling.
 
-## 项目结构
+## Layout
 
 ```text
 .claude-plugin/plugin.json
@@ -23,9 +25,9 @@ test/test_claude_otel_hook.py
 docs/
 ```
 
-## Hook 日志和状态
+## Hook Logs and State
 
-默认文件：
+Default files:
 
 ```text
 ~/.claude/state/claude_otel_hook.log
@@ -33,47 +35,48 @@ docs/
 ~/.claude/state/claude_otel_state.lock
 ```
 
-`claude_otel_state.json` 记录 transcript byte offsets，让重复 hook 调用只处理
-新增 JSONL 行。
+`claude_otel_state.json` tracks transcript byte offsets so repeated hook
+invocations only process new JSONL lines.
 
-## 排查命令
+## Troubleshooting Commands
 
-查看 hook 日志：
+View hook logs:
 
 ```bash
 tail -n 100 ~/.claude/state/claude_otel_hook.log
 ```
 
-查看状态文件：
+Inspect state files:
 
 ```bash
 cat ~/.claude/state/claude_otel_state.json
 ls -l ~/.claude/state/claude_otel_state.lock
 ```
 
-检查配置：
+Check config:
 
 ```bash
 cat ~/.claude/gtrace.json
 ```
 
-检查插件 marketplace：
+Validate the plugin marketplace:
 
 ```bash
 claude plugin validate .
 ```
 
-## 常见问题
+## Common Issues
 
-如果没有上报数据，优先检查：
+If no data is exported, check:
 
-- 插件已安装且启用。
-- Claude Code 已重启或执行过 `/reload-plugins`。
-- `~/.claude/gtrace.json` 存在且 `enabled` 为 `true`。
-- `endpoint`、`tracePath`、`metricsPath` 和认证 header 正确。
-- 使用 `uv` 时，`uv` 在非交互 shell 的 `PATH` 中。
-- 不使用 `uv` 时，`python3` 环境已安装 OpenTelemetry 依赖。
-- `~/.claude/state/claude_otel_hook.log` 中是否有 HTTP 状态码、解析错误或依赖错误。
+- The plugin is installed and enabled.
+- Claude Code was restarted or `/reload-plugins` was run.
+- `~/.claude/gtrace.json` exists and has `"enabled": true`.
+- `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
+- When using `uv`, `uv` is available in the non-interactive shell `PATH`.
+- Without `uv`, the `python3` environment has the OpenTelemetry dependencies.
+- `~/.claude/state/claude_otel_hook.log` for HTTP status codes, parse errors, or
+  dependency errors.
 
-如果看到重复数据，检查状态文件是否能正常写入，以及
-`~/.claude/state/claude_otel_state.lock` 是否长期残留。
+If duplicate data appears, check whether the state file can be written and
+whether `~/.claude/state/claude_otel_state.lock` is stuck.
