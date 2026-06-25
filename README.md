@@ -39,6 +39,72 @@ pip install "opentelemetry-api>=1.25,<2" \
   "opentelemetry-exporter-otlp-proto-http>=1.25,<2"
 ```
 
+## Installation
+
+Install `uv` first if you want Claude Code to resolve the hook dependencies
+automatically:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+If you do not use `uv`, install the Python dependencies listed in
+[Requirements](#requirements) into the `python3` environment Claude Code uses.
+
+From inside Claude Code, add this repository as a plugin marketplace and install
+the plugin:
+
+```text
+/plugin marketplace add GuanceCloud/claude-otel-plugin
+/plugin install claude-otel-plugin@claude-otel-plugin
+/reload-plugins
+```
+
+The repository is private, so the machine running Claude Code must have GitHub
+access to `GuanceCloud/claude-otel-plugin`.
+
+You can also install from a local checkout while developing or testing changes:
+
+```text
+/plugin marketplace add /path/to/claude-otel-plugin
+/plugin install claude-otel-plugin@claude-otel-plugin
+/reload-plugins
+```
+
+After installation, create a config file:
+
+```bash
+mkdir -p ~/.claude
+cat > ~/.claude/gtrace.json <<'JSON'
+{
+  "enabled": true,
+  "endpoint": "https://llm-openway.guance.com",
+  "tracePath": "v1/write/otel-llm",
+  "metricsPath": "v1/write/otel-metrics",
+  "headers": {
+    "X-Token": "<token>",
+    "To-Headless": "true"
+  }
+}
+JSON
+```
+
+Restart Claude Code or run `/reload-plugins`. The hook starts exporting after
+Claude Code emits `Stop` or `SessionEnd` hook events.
+
+To update an existing installation:
+
+```text
+/plugin marketplace update claude-otel-plugin
+/reload-plugins
+```
+
+To uninstall:
+
+```text
+/plugin uninstall claude-otel-plugin@claude-otel-plugin
+```
+
 ## Configuration
 
 The hook resolves config in this order, later items overriding earlier ones:
