@@ -70,11 +70,9 @@ cat > ~/.claude/gtrace.json <<'JSON'
     "To-Headless": "true"
   },
   "resourceAttributes": {
-    "deployment.environment": "prod",
-    "app_id": "claude-monitor",
-    "app_name": "Claude OTEL",
-    "agent_type": "assistant",
-    "agent_source": "claude-code"
+    "env": "prod",
+    "agent_id": "claude-monitor",
+    "agent_name": "Claude OTEL"
   }
 }
 JSON

@@ -30,11 +30,9 @@ Claude Code.
     "To-Headless": "true"
   },
   "resourceAttributes": {
-    "deployment.environment": "prod",
-    "app_id": "claude-monitor",
-    "app_name": "Claude OTEL",
-    "agent_type": "assistant",
-    "agent_source": "claude-code"
+    "env": "prod",
+    "agent_id": "claude-monitor",
+    "agent_name": "Claude OTEL"
   },
   "debug": true
 }
@@ -58,8 +56,9 @@ the hook infers `v1/write/otel-metrics`.
     "Authorization": "Bearer token"
   },
   "resourceAttributes": {
-    "service.name": "claude-code",
-    "deployment.environment": "dev"
+    "env": "dev",
+    "agent_id": "claude-local",
+    "agent_name": "Claude OTEL"
   },
   "timeout_ms": 10000,
   "debug": true,
@@ -88,14 +87,9 @@ or `endpoint + metricsPath`.
 Global filtering tags should be placed in OTLP `resource.attributes`. Traces and
 metrics share the same `resourceAttributes`. Recommended fields:
 
-- `service.name`
-- `host`
-- `host.name`
-- `deployment.environment`
-- `app_id`
-- `app_name`
-- `agent_type`
-- `agent_source`
+- `env`
+- `agent_id`
+- `agent_name`
 
 Notes:
 
