@@ -12,8 +12,13 @@ marked as `status=error`.
 When Claude records `turn_duration` or `toolUseResult.durationSeconds`, those
 values are preferred over delayed transcript timestamps.
 
+When the user explicitly invokes a slash skill such as `/review`, the hook also
+emits a sibling `skill:<name>` span under `invoke_agent` and copies unified
+skill tags onto both `skill:<name>` and related `tool:<name>` spans.
+
 ```text
 invoke_agent
+  skill:<name>
   llm
     assistant
     tool:<name>
@@ -53,6 +58,35 @@ invoke_agent
 - `host.name`
 
 `host` and `host.name` are written to resource and metric attributes.
+
+## Skill Attributes
+
+`skill` is not an official OpenTelemetry GenAI semantic namespace as of
+2026-06-25. This plugin keeps compatibility fields and also emits
+`gen_ai.skill.*` project extension fields.
+
+Unified skill tags are added to `skill:<name>` and related `tool:<name>` spans
+when the turn begins with an explicit `/<skill>` invocation and the skill can be
+matched against the session `skill_listing`.
+
+| Field | Meaning |
+| --- | --- |
+| `skill.name` | Skill name, from the resolved `SKILL.md` directory name |
+| `skill.description` | Prefer `SKILL.md` frontmatter `description`, then the first body paragraph, then the session skill listing description |
+| `skill.path` | Absolute path to the resolved `SKILL.md` |
+| `skill_call_id` | Synthetic call ID used to correlate `skill:*` and related `tool:*` spans |
+| `skill.source.type` | `workspace`, `user`, or `system` |
+| `skill.result_status` | `completed` or `error` |
+| `gen_ai.skill.name` | Skill name project extension |
+| `gen_ai.skill.path` | Skill path project extension |
+| `gen_ai.skill.source.type` | Skill source type project extension |
+| `gen_ai.skill.result_status` | Skill result status project extension |
+| `gen_ai.skill.description` | Skill description project extension |
+| `gen_ai.skill.version` | Prefer `SKILL.md` frontmatter `version`, else nearest `package.json.version` |
+
+Current limitation: skill tags are only emitted for explicit slash-skill
+invocations that can be matched against the session `skill_listing`. Passive
+skill availability alone does not create skill spans.
 
 ## Token Semantics
 

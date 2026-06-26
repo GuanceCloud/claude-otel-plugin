@@ -270,6 +270,31 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(len(turns), 1)
         self.assertAlmostEqual(turns[0].tool_results_by_id["tool-1"]["duration_seconds"], 3.926)
 
+    def test_extract_skill_listing_map_prefers_skill_file_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            skill_dir = cwd / ".claude" / "skills" / "review"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: review\ndescription: Review skill from frontmatter.\nversion: 2.4.6\n---\n\n# Review\n",
+                encoding="utf-8",
+            )
+            msg = {
+                "attachment": {
+                    "type": "skill_listing",
+                    "names": ["review"],
+                    "content": "- review: fallback description from listing",
+                }
+            }
+
+            catalog = hook.extract_skill_listing_map(msg, cwd)
+
+            self.assertEqual(catalog["review"]["name"], "review")
+            self.assertEqual(catalog["review"]["description"], "Review skill from frontmatter.")
+            self.assertEqual(catalog["review"]["source_type"], "workspace")
+            self.assertTrue(catalog["review"]["path"].endswith("/review/SKILL.md"))
+            self.assertEqual(catalog["review"]["version"], "2.4.6")
+
     def test_build_turns_with_pending_defers_trailing_incomplete_turn(self):
         messages = [
             {
@@ -609,6 +634,111 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual((tool.end_time - tool.start_time) / 1_000_000_000, 15)
         self.assertEqual(error_llm.attributes["status"], "error")
         self.assertLessEqual((error_llm.end_time - error_llm.start_time) / 1_000_000_000, 6)
+
+    def test_emit_turn_adds_skill_tags_to_skill_and_tool_spans(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-26T01:00:00Z",
+                "message": {"content": "/review current diff"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-26T01:00:01Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "content": [
+                        {"type": "text", "text": "I'll inspect the diff."},
+                        {"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "git diff --stat"}},
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-26T01:00:02Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "README.md | 2 +-"},
+                    ]
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 2200,
+            },
+        ]
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+        skill_catalog = {
+            "review": {
+                "name": "review",
+                "description": "Review a pull request",
+                "path": "/tmp/review/SKILL.md",
+                "source_type": "system",
+                "version": "1.7.0",
+            }
+        }
+
+        hook.emit_turn(
+            FakeTraceAPI,
+            tracer,
+            None,
+            config,
+            "session-1",
+            1,
+            turn,
+            Path("/tmp/session.jsonl"),
+            skill_catalog=skill_catalog,
+        )
+
+        by_name = {span.name: span for span in tracer.spans}
+        skill_span = by_name["skill:review"]
+        tool_span = by_name["tool:Bash"]
+        self.assertEqual(skill_span.attributes["skill.name"], "review")
+        self.assertEqual(skill_span.attributes["skill.description"], "Review a pull request")
+        self.assertEqual(skill_span.attributes["skill.path"], "/tmp/review/SKILL.md")
+        self.assertEqual(skill_span.attributes["skill.source.type"], "system")
+        self.assertEqual(skill_span.attributes["skill.result_status"], "completed")
+        self.assertEqual(skill_span.attributes["gen_ai.skill.name"], "review")
+        self.assertEqual(skill_span.attributes["gen_ai.skill.version"], "1.7.0")
+        self.assertEqual(tool_span.attributes["skill.name"], "review")
+        self.assertEqual(tool_span.attributes["skill.description"], "Review a pull request")
+        self.assertEqual(tool_span.attributes["skill.path"], "/tmp/review/SKILL.md")
+        self.assertEqual(tool_span.attributes["skill.source.type"], "system")
+        self.assertEqual(tool_span.attributes["skill.result_status"], "completed")
+        self.assertEqual(tool_span.attributes["gen_ai.skill.name"], "review")
+        self.assertEqual(tool_span.attributes["gen_ai.skill.version"], "1.7.0")
+        self.assertEqual(tool_span.attributes["skill_call_id"], skill_span.attributes["skill_call_id"])
 
     def test_emit_turn_produces_positive_durations_for_realistic_tool_turn(self):
         class FakeTraceAPI:

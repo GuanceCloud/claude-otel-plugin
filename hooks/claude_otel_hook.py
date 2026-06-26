@@ -39,6 +39,7 @@ DEFAULT_TRACE_PATH = "v1/traces"
 DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
+SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
 def _plugin_opt(env: Dict[str, str], name: str) -> Optional[str]:
@@ -211,6 +212,26 @@ class RuntimeMetadata:
 
 
 @dataclass
+class SkillDefinition:
+    name: str
+    description: Optional[str] = None
+    path: Optional[str] = None
+    source_type: Optional[str] = None
+    version: Optional[str] = None
+
+
+@dataclass
+class SkillInvocation:
+    name: str
+    call_id: str
+    description: Optional[str] = None
+    path: Optional[str] = None
+    source_type: Optional[str] = None
+    version: Optional[str] = None
+    result_status: str = "completed"
+
+
+@dataclass
 class TraceExportTracker:
     export_calls: int = 0
     had_failure: bool = False
@@ -270,7 +291,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.2",
+            "telemetry.sdk.version": "0.1.3",
             "agent_runtime": "claude-code",
             "agent_source": "claude-code",
             "agent_type": "assistant",
@@ -480,10 +501,13 @@ class SessionState:
     buffer: str = ""
     turn_count: int = 0
     pending_messages: List[Dict[str, Any]] = None
+    skill_catalog: Dict[str, Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         if self.pending_messages is None:
             self.pending_messages = []
+        if self.skill_catalog is None:
+            self.skill_catalog = {}
 
 
 def load_session_state(global_state: Dict[str, Any], key: str) -> SessionState:
@@ -493,11 +517,19 @@ def load_session_state(global_state: Dict[str, Any], key: str) -> SessionState:
     pending_messages = raw.get("pending_messages")
     if not isinstance(pending_messages, list):
         pending_messages = []
+    skill_catalog = raw.get("skill_catalog")
+    if not isinstance(skill_catalog, dict):
+        skill_catalog = {}
     return SessionState(
         offset=parse_int(raw.get("offset"), 0),
         buffer=str(raw.get("buffer") or ""),
         turn_count=parse_int(raw.get("turn_count"), 0),
         pending_messages=[item for item in pending_messages if isinstance(item, dict)],
+        skill_catalog={
+            str(name): value
+            for name, value in skill_catalog.items()
+            if isinstance(name, str) and isinstance(value, dict)
+        },
     )
 
 
@@ -507,6 +539,7 @@ def write_session_state(global_state: Dict[str, Any], key: str, state: SessionSt
         "buffer": state.buffer,
         "turn_count": state.turn_count,
         "pending_messages": state.pending_messages,
+        "skill_catalog": state.skill_catalog,
         "updated": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -756,6 +789,212 @@ def parse_ts(value: Any) -> Optional[datetime]:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def parse_simple_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return {}, text
+    header = text[4:end]
+    body = text[end + 5:]
+    meta: Dict[str, str] = {}
+    for raw_line in header.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        value = raw_value.strip().strip("'").strip('"')
+        if key and value:
+            meta[key] = value
+    return meta, body
+
+
+def extract_body_description(text: str) -> Optional[str]:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        return line
+    return None
+
+
+def parse_skill_markdown(path: Path) -> Tuple[Dict[str, str], Optional[str]]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return {}, None
+    meta, body = parse_simple_frontmatter(text)
+    description = meta.get("description") or extract_body_description(body)
+    return meta, description
+
+
+def parse_package_version(path: Path) -> Optional[str]:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    version = parsed.get("version")
+    if isinstance(version, str) and version.strip():
+        return version.strip()
+    return None
+
+
+def skill_search_roots(cwd: Path, home: Optional[Path] = None) -> List[Tuple[str, Path]]:
+    home = home or Path.home()
+    roots: List[Tuple[str, Path]] = [
+        ("workspace", cwd / ".claude" / "skills"),
+        ("user", home / ".claude" / "skills"),
+        ("system", home / ".claude" / "skills" / ".system"),
+        ("system", home / ".codex" / "skills" / ".system"),
+    ]
+    seen = set()
+    unique: List[Tuple[str, Path]] = []
+    for source_type, root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((source_type, root))
+    return unique
+
+
+def resolve_skill_definition(
+    skill_name: str,
+    cwd: Path,
+    *,
+    home: Optional[Path] = None,
+    fallback_description: Optional[str] = None,
+) -> SkillDefinition:
+    fallback = SkillDefinition(
+        name=skill_name,
+        description=fallback_description,
+        source_type="system",
+    )
+    normalized_names = [skill_name]
+    if ":" in skill_name:
+        normalized_names.append(skill_name.split(":")[-1])
+    if "/" in skill_name:
+        normalized_names.append(skill_name.rsplit("/", 1)[-1])
+
+    for source_type, root in skill_search_roots(cwd, home):
+        if not root.exists():
+            continue
+        for candidate_name in normalized_names:
+            direct = root / candidate_name / "SKILL.md"
+            if direct.exists():
+                meta, description = parse_skill_markdown(direct)
+                version = meta.get("version")
+                if not version:
+                    current = direct.parent
+                    while True:
+                        package_version = parse_package_version(current / "package.json")
+                        if package_version:
+                            version = package_version
+                            break
+                        if current == root or current.parent == current:
+                            break
+                        current = current.parent
+                return SkillDefinition(
+                    name=direct.parent.name,
+                    description=description or fallback_description,
+                    path=str(direct.resolve()),
+                    source_type=source_type,
+                    version=version,
+                )
+        try:
+            for skill_file in root.rglob("SKILL.md"):
+                if skill_file.parent.name not in normalized_names:
+                    continue
+                meta, description = parse_skill_markdown(skill_file)
+                version = meta.get("version")
+                if not version:
+                    current = skill_file.parent
+                    while True:
+                        package_version = parse_package_version(current / "package.json")
+                        if package_version:
+                            version = package_version
+                            break
+                        if current == root or current.parent == current:
+                            break
+                        current = current.parent
+                return SkillDefinition(
+                    name=skill_file.parent.name,
+                    description=description or fallback_description,
+                    path=str(skill_file.resolve()),
+                    source_type=source_type,
+                    version=version,
+                )
+        except Exception:
+            continue
+    return fallback
+
+
+def extract_skill_listing_map(msg: Dict[str, Any], cwd: Path, *, home: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    attachment = msg.get("attachment")
+    if not isinstance(attachment, dict) or attachment.get("type") != "skill_listing":
+        return {}
+    names = attachment.get("names")
+    if not isinstance(names, list):
+        return {}
+    descriptions: Dict[str, str] = {}
+    content = attachment.get("content")
+    if isinstance(content, str):
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            match = re.match(r"^-\s*([A-Za-z0-9:_-]+):\s*(.+)$", line)
+            if match:
+                descriptions[match.group(1)] = match.group(2).strip()
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw_name in names:
+        if not isinstance(raw_name, str) or not raw_name:
+            continue
+        skill = resolve_skill_definition(raw_name, cwd, home=home, fallback_description=descriptions.get(raw_name))
+        out[skill.name] = {
+            "name": skill.name,
+            "description": skill.description,
+            "path": skill.path,
+            "source_type": skill.source_type,
+            "version": skill.version,
+        }
+    return out
+
+
+def merge_skill_catalog(existing: Dict[str, Dict[str, Any]], messages: List[Dict[str, Any]], cwd: Path, *, home: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    catalog: Dict[str, Dict[str, Any]] = {
+        str(name): dict(value)
+        for name, value in existing.items()
+        if isinstance(name, str) and isinstance(value, dict)
+    }
+    for msg in messages:
+        catalog.update(extract_skill_listing_map(msg, cwd, home=home))
+    return catalog
+
+
+def detect_active_skill(turn: Turn, skill_catalog: Dict[str, Dict[str, Any]], session_id: str, turn_num: int) -> Optional[SkillInvocation]:
+    user_text = extract_text(get_content(turn.user_msg)).strip()
+    match = SKILL_NAME_PATTERN.match(user_text)
+    if not match:
+        return None
+    requested_name = match.group(1)
+    skill = skill_catalog.get(requested_name)
+    if not skill:
+        return None
+    result_status = "completed"
+    if any(bool(result.get("is_error")) for result in turn.tool_results_by_id.values()):
+        result_status = "error"
+    call_id = f"skillu_{hashlib.sha256(f'{session_id}:{turn_num}:{requested_name}'.encode('utf-8')).hexdigest()[:16]}"
+    return SkillInvocation(
+        name=str(skill.get("name") or requested_name),
+        call_id=call_id,
+        description=str(skill.get("description")) if skill.get("description") else None,
+        path=str(skill.get("path")) if skill.get("path") else None,
+        source_type=str(skill.get("source_type")) if skill.get("source_type") else None,
+        version=str(skill.get("version")) if skill.get("version") else None,
+        result_status=result_status,
+    )
 
 
 def to_ns(ts: Optional[datetime]) -> Optional[int]:
@@ -1136,7 +1375,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.2"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.3"), tracker
 
 
 @dataclass
@@ -1185,7 +1424,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.2")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.3")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1373,7 +1612,24 @@ def record_token_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str, Any
             )
 
 
-def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], config: HookConfig, session_id: str, turn_num: int, turn: Turn, transcript_path: Path) -> None:
+def apply_skill_attrs(attrs: Dict[str, Any], skill: Optional[SkillInvocation]) -> None:
+    if not skill:
+        return
+    attr_set(attrs, "skill.name", skill.name)
+    attr_set(attrs, "skill.description", skill.description)
+    attr_set(attrs, "skill.path", skill.path)
+    attr_set(attrs, "skill_call_id", skill.call_id)
+    attr_set(attrs, "skill.source.type", skill.source_type)
+    attr_set(attrs, "skill.result_status", skill.result_status)
+    attr_set(attrs, "gen_ai.skill.name", skill.name)
+    attr_set(attrs, "gen_ai.skill.path", skill.path)
+    attr_set(attrs, "gen_ai.skill.source.type", skill.source_type)
+    attr_set(attrs, "gen_ai.skill.result_status", skill.result_status)
+    attr_set(attrs, "gen_ai.skill.description", skill.description)
+    attr_set(attrs, "gen_ai.skill.version", skill.version)
+
+
+def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], config: HookConfig, session_id: str, turn_num: int, turn: Turn, transcript_path: Path, skill_catalog: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
     user_text, user_meta = truncate_text(extract_text(get_content(turn.user_msg)), config.max_chars)
     user_ts = parse_ts(turn.user_msg)
     recorded_turn_end_ts = add_duration(user_ts, milliseconds=turn.turn_duration_ms)
@@ -1397,6 +1653,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     root_error_type = None
     root_error_reason = None
     root_error_status_code = None
+    active_skill = detect_active_skill(turn, skill_catalog or {}, session_id, turn_num)
     for assistant in turn.assistant_msgs:
         final_text = extract_text(get_content(assistant)) or final_text
         assistant_tool_uses = iter_tool_uses(get_content(assistant))
@@ -1410,6 +1667,8 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             root_error_type = error_type or root_error_type or "api_error"
             root_error_reason = reason or root_error_reason
             root_error_status_code = status_code or root_error_status_code
+    if active_skill and root_status == "error":
+        active_skill.result_status = "error"
 
     root_attrs: Dict[str, Any] = common_attrs(config, session_id, run_id, final_model)
     root_attrs.update({
@@ -1441,6 +1700,22 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
 
     root = tracer.start_span("invoke_agent", start_time=to_ns(user_ts), attributes=clean_attrs(root_attrs))
     root_context = trace_api.set_span_in_context(root)
+    if active_skill:
+        skill_attrs = common_attrs(config, session_id, run_id, final_model)
+        skill_attrs.update({
+            "status": root_status,
+            "error.type": root_error_type,
+            "reason": root_error_reason,
+            "http.status_code": root_error_status_code,
+        })
+        apply_skill_attrs(skill_attrs, active_skill)
+        skill_span = tracer.start_span(
+            f"skill:{active_skill.name}",
+            context=root_context,
+            start_time=to_ns(user_ts),
+            attributes=clean_attrs(skill_attrs),
+        )
+        skill_span.end(end_time=to_ns(end_ts or user_ts))
     prev_ts = user_ts
     prev_tool_results: List[Dict[str, Any]] = []
 
@@ -1541,6 +1816,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 "error.type": "_OTHER" if is_error else None,
                 "reason": compact_text(tool_output, config.max_chars) if is_error else None,
             })
+            apply_skill_attrs(tool_attrs, active_skill)
             add_truncation_attrs(tool_attrs, "input", tool_input_meta)
             add_truncation_attrs(tool_attrs, "output", tool_output_meta)
             injected = turn.injected_by_tool_id.get(tool_id)
@@ -1683,6 +1959,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                 return 0
 
             runtime = extract_runtime_metadata(combined_messages, payload)
+            session_state.skill_catalog = merge_skill_catalog(session_state.skill_catalog, combined_messages, config_cwd, home=Path.home())
             if provider is None:
                 try:
                     trace_api, provider, tracer, trace_tracker = create_tracer_provider(config, runtime)
@@ -1694,7 +1971,17 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
             turns, pending_messages = build_turns_with_pending(combined_messages)
             for turn in turns:
                 emitted += 1
-                emit_turn(trace_api, tracer, metrics, config, session_id, session_state.turn_count + emitted, turn, transcript_path)
+                emit_turn(
+                    trace_api,
+                    tracer,
+                    metrics,
+                    config,
+                    session_id,
+                    session_state.turn_count + emitted,
+                    turn,
+                    transcript_path,
+                    session_state.skill_catalog,
+                )
 
             if provider is not None:
                 provider_flushed = True

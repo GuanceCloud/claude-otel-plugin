@@ -11,7 +11,7 @@ upload failures are logged but do not block Claude Code.
 ## Capabilities
 
 - Collects Claude Code turns, assistant generations, tool calls, tool results,
-  and token usage.
+  token usage, and explicit slash-skill invocation metadata.
 - Generates `invoke_agent`, `llm`, `assistant`, and `tool:<name>` spans.
 - Exports OTLP traces and metrics over HTTP/protobuf.
 - Derives metrics from the same turn data as traces.
