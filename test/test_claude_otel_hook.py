@@ -1176,6 +1176,152 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(persisted_state[key]["turn_count"], 1)
         self.assertEqual(persisted_state[key]["pending_messages"], [])
 
+    def test_run_flushes_stop_turn_without_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "user",
+                                "timestamp": "2026-06-29T08:46:49.605Z",
+                                "message": {"role": "user", "content": "reply ok"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "timestamp": "2026-06-29T08:46:58.509Z",
+                                "message": {
+                                    "id": "msg-1",
+                                    "model": "claude-test",
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "ok"}],
+                                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = json.dumps(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "s1",
+                    "transcript_path": str(transcript),
+                }
+            )
+            persisted_state = {}
+
+            class FakeProvider:
+                pass
+
+            emitted_turns = []
+
+            def load_state():
+                return json.loads(json.dumps(persisted_state))
+
+            def save_state(state):
+                persisted_state.clear()
+                persisted_state.update(json.loads(json.dumps(state)))
+
+            with mock.patch.object(hook, "FileLock", side_effect=lambda *args, **kwargs: contextlib.nullcontext()), \
+                mock.patch.object(hook, "load_state", side_effect=load_state), \
+                mock.patch.object(hook, "save_state", side_effect=save_state), \
+                mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
+                mock.patch.object(hook, "create_metrics_provider", return_value=None), \
+                mock.patch.object(hook, "emit_turn", side_effect=lambda *args: emitted_turns.append(args[5])), \
+                mock.patch.object(hook, "flush_provider", return_value=True):
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+        key = hook.state_key("s1", str(transcript.resolve()))
+        self.assertEqual(status, 0)
+        self.assertEqual(emitted_turns, [1])
+        self.assertEqual(persisted_state[key]["turn_count"], 1)
+        self.assertEqual(persisted_state[key]["pending_messages"], [])
+
+    def test_run_flushes_pending_turn_when_no_new_messages_arrive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "user",
+                                "timestamp": "2026-06-29T08:46:49.605Z",
+                                "message": {"role": "user", "content": "reply ok"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "timestamp": "2026-06-29T08:46:58.509Z",
+                                "message": {
+                                    "id": "msg-1",
+                                    "model": "claude-test",
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "ok"}],
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = json.dumps({"session_id": "s1", "transcript_path": str(transcript)})
+            persisted_state = {}
+
+            class FakeProvider:
+                pass
+
+            emitted_turns = []
+
+            def load_state():
+                return json.loads(json.dumps(persisted_state))
+
+            def save_state(state):
+                persisted_state.clear()
+                persisted_state.update(json.loads(json.dumps(state)))
+
+            with mock.patch.object(hook, "FileLock", side_effect=lambda *args, **kwargs: contextlib.nullcontext()), \
+                mock.patch.object(hook, "load_state", side_effect=load_state), \
+                mock.patch.object(hook, "save_state", side_effect=save_state), \
+                mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
+                mock.patch.object(hook, "create_metrics_provider", return_value=None), \
+                mock.patch.object(hook, "emit_turn", side_effect=lambda *args: emitted_turns.append(args[5])), \
+                mock.patch.object(hook, "flush_provider", return_value=True):
+                hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+        key = hook.state_key("s1", str(transcript.resolve()))
+        self.assertEqual(status, 0)
+        self.assertEqual(emitted_turns, [1])
+        self.assertEqual(persisted_state[key]["turn_count"], 1)
+        self.assertEqual(persisted_state[key]["pending_messages"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

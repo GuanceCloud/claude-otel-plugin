@@ -291,7 +291,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.3",
+            "telemetry.sdk.version": "0.1.4",
             "agent_runtime": "claude-code",
             "agent_source": "claude-code",
             "agent_type": "assistant",
@@ -1237,6 +1237,39 @@ def build_turns(messages: List[Dict[str, Any]]) -> List[Turn]:
     return turns
 
 
+def hook_event_name(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("hook_event_name", "hookEventName", "event", "event_name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def has_user_and_assistant(messages: List[Dict[str, Any]]) -> bool:
+    saw_user = False
+    saw_assistant = False
+    for msg in messages:
+        role = get_role(msg)
+        if role == "user" and not is_tool_result_message(msg):
+            saw_user = True
+        elif role == "assistant":
+            saw_assistant = True
+    return saw_user and saw_assistant
+
+
+def should_flush_pending_without_duration(
+    payload: Dict[str, Any],
+    new_messages: List[Dict[str, Any]],
+    pending_messages: List[Dict[str, Any]],
+) -> bool:
+    if not has_user_and_assistant(pending_messages):
+        return False
+    event_name = hook_event_name(payload)
+    if event_name in {"Stop", "SessionEnd"}:
+        return True
+    return not new_messages
+
+
 def attr_set(attrs: Dict[str, Any], key: str, value: Any) -> None:
     if value is None:
         return
@@ -1375,7 +1408,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.3"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.4"), tracker
 
 
 @dataclass
@@ -1424,7 +1457,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.3")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.4")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1969,6 +2002,9 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                     return 0
 
             turns, pending_messages = build_turns_with_pending(combined_messages)
+            if pending_messages and should_flush_pending_without_duration(payload, messages, pending_messages):
+                turns.extend(build_turns(pending_messages))
+                pending_messages = []
             for turn in turns:
                 emitted += 1
                 emit_turn(
