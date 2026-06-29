@@ -29,7 +29,7 @@ invoke_agent
 
 - `gen_ai.conversation.id`
 - `session_id`, kept for compatibility with existing dashboards
-- `gen_ai.agent.name=claude-code`
+- `gen_ai.agent.name=claude`
 - `gen_ai.agent.version`
 - `gen_ai.operation.name=invoke_agent|chat|execute_tool`
 - `gen_ai.provider.name=anthropic`

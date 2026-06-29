@@ -414,7 +414,7 @@ class ClaudeOtelHookTest(unittest.TestCase):
             hook.RuntimeMetadata(agent_version="2.1.178", host="liurui"),
         )
 
-        self.assertEqual(attrs["agent_runtime"], "claude-code")
+        self.assertEqual(attrs["agent_runtime"], "claude")
         self.assertEqual(attrs["gen_ai.agent.version"], "2.1.178")
         self.assertEqual(attrs["host"], "liurui")
         self.assertEqual(attrs["host.name"], "liurui")
@@ -511,7 +511,7 @@ class ClaudeOtelHookTest(unittest.TestCase):
         root = tracer.spans[0].attributes
         llm = tracer.spans[1].attributes
         tool = tracer.spans[2].attributes
-        self.assertEqual(root["gen_ai.agent.name"], "claude-code")
+        self.assertEqual(root["gen_ai.agent.name"], "claude")
         self.assertEqual(root["gen_ai.operation.name"], "invoke_agent")
         self.assertEqual(root["gen_ai.conversation.id"], "session-1")
         self.assertEqual(root["session_id"], "session-1")
@@ -876,7 +876,7 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertGreater(tool_second.end_time - tool_second.start_time, 0)
         self.assertEqual(len(assistant_spans), 2)
         self.assertGreater(assistant_spans[0].end_time - assistant_spans[0].start_time, 0)
-        self.assertEqual(assistant_spans[1].end_time - assistant_spans[1].start_time, 0)
+        self.assertGreater(assistant_spans[1].end_time - assistant_spans[1].start_time, 0)
         self.assertEqual((root.end_time - root.start_time) / 1_000_000_000, 60.096999936)
         self.assertEqual(
             json_attr(root.attributes, "gen_ai.input.messages"),
@@ -1248,6 +1248,81 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(emitted_turns, [1])
         self.assertEqual(persisted_state[key]["turn_count"], 1)
         self.assertEqual(persisted_state[key]["pending_messages"], [])
+
+    def test_run_does_not_flush_tool_use_only_stop_turn_without_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "user",
+                                "timestamp": "2026-06-29T09:38:21.762Z",
+                                "message": {"role": "user", "content": "当前上海天气"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "timestamp": "2026-06-29T09:38:29.656Z",
+                                "message": {
+                                    "id": "msg-1",
+                                    "model": "claude-test",
+                                    "role": "assistant",
+                                    "content": [
+                                        {"type": "tool_use", "id": "tool-1", "name": "WebSearch", "input": {"query": "上海 当前天气"}},
+                                    ],
+                                    "stop_reason": "tool_use",
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = json.dumps(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "s1",
+                    "transcript_path": str(transcript),
+                }
+            )
+            persisted_state = {}
+
+            class FakeProvider:
+                pass
+
+            emitted_turns = []
+
+            def load_state():
+                return json.loads(json.dumps(persisted_state))
+
+            def save_state(state):
+                persisted_state.clear()
+                persisted_state.update(json.loads(json.dumps(state)))
+
+            with mock.patch.object(hook, "FileLock", side_effect=lambda *args, **kwargs: contextlib.nullcontext()), \
+                mock.patch.object(hook, "load_state", side_effect=load_state), \
+                mock.patch.object(hook, "save_state", side_effect=save_state), \
+                mock.patch.object(hook, "create_tracer_provider", return_value=(object(), FakeProvider(), object(), hook.TraceExportTracker(export_calls=1))), \
+                mock.patch.object(hook, "create_metrics_provider", return_value=None), \
+                mock.patch.object(hook, "emit_turn", side_effect=lambda *args: emitted_turns.append(args[5])), \
+                mock.patch.object(hook, "flush_provider", return_value=True):
+                status = hook.run(
+                    payload,
+                    env={
+                        "CLAUDE_OTEL_ENABLED": "true",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+                    },
+                )
+
+        key = hook.state_key("s1", str(transcript.resolve()))
+        self.assertEqual(status, 0)
+        self.assertEqual(emitted_turns, [])
+        self.assertEqual(persisted_state[key]["turn_count"], 0)
+        self.assertEqual(len(persisted_state[key]["pending_messages"]), 2)
 
     def test_run_flushes_pending_turn_when_no_new_messages_arrive(self):
         with tempfile.TemporaryDirectory() as tmp:

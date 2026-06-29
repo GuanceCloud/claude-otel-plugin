@@ -75,7 +75,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces
 export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:4318/v1/metrics
 export OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer token'
-export OTEL_RESOURCE_ATTRIBUTES='service.name=claude-code,deployment.environment=dev'
+export OTEL_RESOURCE_ATTRIBUTES='service.name=claude,deployment.environment=dev'
 ```
 
 If `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or

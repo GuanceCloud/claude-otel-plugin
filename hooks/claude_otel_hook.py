@@ -39,6 +39,7 @@ DEFAULT_TRACE_PATH = "v1/traces"
 DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
+AGENT_RUNTIME = "claude"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -291,9 +292,9 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.4",
-            "agent_runtime": "claude-code",
-            "agent_source": "claude-code",
+            "telemetry.sdk.version": "0.1.5",
+            "agent_runtime": AGENT_RUNTIME,
+            "agent_source": AGENT_RUNTIME,
             "agent_type": "assistant",
         },
     }
@@ -1257,12 +1258,54 @@ def has_user_and_assistant(messages: List[Dict[str, Any]]) -> bool:
     return saw_user and saw_assistant
 
 
+def last_assistant_message(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for msg in reversed(messages):
+        if get_role(msg) == "assistant":
+            return msg
+    return None
+
+
+def unresolved_tool_use_ids(messages: List[Dict[str, Any]]) -> List[str]:
+    tool_use_ids: List[str] = []
+    resolved_ids = set()
+    for msg in messages:
+        if get_role(msg) == "assistant":
+            for tool in iter_tool_uses(get_content(msg)):
+                tool_id = tool.get("id")
+                if isinstance(tool_id, str) and tool_id:
+                    tool_use_ids.append(tool_id)
+        elif is_tool_result_message(msg):
+            for result in iter_tool_results(get_content(msg)):
+                tool_id = result.get("tool_use_id")
+                if isinstance(tool_id, str) and tool_id:
+                    resolved_ids.add(tool_id)
+    return [tool_id for tool_id in tool_use_ids if tool_id not in resolved_ids]
+
+
+def pending_turn_is_complete(messages: List[Dict[str, Any]]) -> bool:
+    if not has_user_and_assistant(messages):
+        return False
+    if unresolved_tool_use_ids(messages):
+        return False
+    last_assistant = last_assistant_message(messages)
+    if not last_assistant:
+        return False
+    stop_reason = get_stop_reason(last_assistant)
+    if stop_reason == "tool_use":
+        return False
+    if stop_reason in {"end_turn", "stop_sequence", "max_tokens"}:
+        return True
+    if is_api_error_message(last_assistant):
+        return False
+    return bool(extract_text(get_content(last_assistant)).strip()) and not iter_tool_uses(get_content(last_assistant))
+
+
 def should_flush_pending_without_duration(
     payload: Dict[str, Any],
     new_messages: List[Dict[str, Any]],
     pending_messages: List[Dict[str, Any]],
 ) -> bool:
-    if not has_user_and_assistant(pending_messages):
+    if not pending_turn_is_complete(pending_messages):
         return False
     event_name = hook_event_name(payload)
     if event_name in {"Stop", "SessionEnd"}:
@@ -1353,7 +1396,7 @@ def extract_runtime_metadata(messages: List[Dict[str, Any]], payload: Dict[str, 
 
 def runtime_resource_attributes(config: HookConfig, runtime: RuntimeMetadata) -> Dict[str, Any]:
     attrs = dict(config.resource_attributes)
-    attrs.setdefault("agent_runtime", "claude-code")
+    attrs.setdefault("agent_runtime", AGENT_RUNTIME)
     if runtime.agent_version:
         attrs["gen_ai.agent.version"] = runtime.agent_version
     if runtime.host:
@@ -1408,7 +1451,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.4"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.5"), tracker
 
 
 @dataclass
@@ -1457,7 +1500,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.4")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.5")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1504,6 +1547,11 @@ def add_duration(start: Optional[datetime], seconds: Optional[float] = None, mil
     if isinstance(milliseconds, (int, float)):
         delta += timedelta(milliseconds=float(milliseconds))
     return start + delta
+
+
+def max_ts(*values: Optional[datetime]) -> Optional[datetime]:
+    valid = [value for value in values if value is not None]
+    return max(valid) if valid else None
 
 
 def clamp_ts(value: Optional[datetime], end: Optional[datetime]) -> Optional[datetime]:
@@ -1556,7 +1604,7 @@ def common_attrs(config: HookConfig, session_id: str, run_id: str, model: Option
     attrs: Dict[str, Any] = {
         "session_id": session_id,
         "gen_ai.conversation.id": session_id,
-        "gen_ai.agent.name": "claude-code",
+        "gen_ai.agent.name": AGENT_RUNTIME,
         "gen_ai.provider.name": "anthropic",
         "request_type": "user_request",
         "is_internal_request": False,
@@ -1577,7 +1625,7 @@ def metric_base_attrs(span_attrs: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
     attrs: Dict[str, Any] = {
-        "agent_runtime": "claude-code",
+        "agent_runtime": AGENT_RUNTIME,
         "session_id": span_attrs.get("session_id") or span_attrs.get("gen_ai.conversation.id"),
         "gen_ai.conversation.id": span_attrs.get("gen_ai.conversation.id"),
         "gen_ai.provider.name": span_attrs.get("gen_ai.provider.name"),
@@ -1877,6 +1925,9 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
 
         generation_end = max(batch_result_times) if batch_result_times else assistant_ts
         if assistant_text:
+            assistant_end = generation_end or assistant_ts
+            if not tool_uses:
+                assistant_end = max_ts(assistant_end, end_ts, recorded_turn_end_ts)
             assistant_attrs = common_attrs(config, session_id, run_id, model)
             assistant_attrs.update({
                 "gen_ai.operation.name": "chat",
@@ -1885,7 +1936,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 "output_length": len(assistant_raw_text),
                 "output_kind": "text",
                 "assistant_message_start_time": assistant_ts.isoformat() if assistant_ts else None,
-                "assistant_message_end_time": (generation_end or assistant_ts).isoformat() if (generation_end or assistant_ts) else None,
+                "assistant_message_end_time": assistant_end.isoformat() if assistant_end else None,
                 "step_index": idx,
                 "message_index": 0,
                 "status": "error" if is_api_error else "ok",
@@ -1899,7 +1950,11 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 start_time=to_ns(assistant_ts),
                 attributes=clean_attrs(assistant_attrs),
             )
-            assistant_span.end(end_time=to_ns(generation_end or assistant_ts))
+            assistant_end_ns = to_ns(assistant_end or assistant_ts)
+            assistant_start_ns = to_ns(assistant_ts)
+            if assistant_end_ns is not None and assistant_start_ns is not None and assistant_end_ns <= assistant_start_ns:
+                assistant_end_ns = assistant_start_ns + 1
+            assistant_span.end(end_time=assistant_end_ns)
         generation.end(end_time=to_ns(generation_end or assistant_ts or prev_ts))
         record_operation_metrics(metrics, generation_attrs, duration_s(prev_ts or assistant_ts, generation_end or assistant_ts or prev_ts), "chat")
         record_token_metrics(metrics, generation_attrs)
