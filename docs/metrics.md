@@ -22,10 +22,12 @@ Common metric tags:
 - `gen_ai.conversation.id`
 - `gen_ai.operation.name`
 - `gen_ai.provider.name`
-- `gen_ai.request.model`
-- `gen_ai.response.model`
 - `host`
 - `host.name`
+
+Workflow metrics derived from `invoke_agent` intentionally omit model tags.
+Model tags are still present on operation and token metrics derived from `llm`
+spans.
 
 Tool operation metrics also include:
 

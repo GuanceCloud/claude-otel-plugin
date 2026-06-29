@@ -33,12 +33,6 @@ invoke_agent
 - `gen_ai.agent.version`
 - `gen_ai.operation.name=invoke_agent|chat|execute_tool`
 - `gen_ai.provider.name=anthropic`
-- `gen_ai.request.model`
-- `gen_ai.response.model`
-- `gen_ai.usage.input_tokens`
-- `gen_ai.usage.output_tokens`
-- `gen_ai.usage.cache_read.input_tokens`
-- `gen_ai.usage.cache_creation.input_tokens`
 - `gen_ai.tool.name`
 - `gen_ai.tool.call.id`
 - `gen_ai.tool.call.arguments`
@@ -58,6 +52,10 @@ invoke_agent
 - `host.name`
 
 `host` and `host.name` are written to resource and metric attributes.
+
+`invoke_agent` intentionally omits `gen_ai.request.model`,
+`gen_ai.response.model`, and `gen_ai.usage.*` attributes. Those fields are kept
+on `llm` spans instead.
 
 ## Skill Attributes
 

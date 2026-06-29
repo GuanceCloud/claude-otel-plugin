@@ -516,8 +516,10 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(root["gen_ai.conversation.id"], "session-1")
         self.assertEqual(root["session_id"], "session-1")
         self.assertEqual(root["gen_ai.provider.name"], "anthropic")
-        self.assertEqual(root["gen_ai.usage.input_tokens"], 125)
-        self.assertEqual(root["gen_ai.usage.cache_read.input_tokens"], 25)
+        self.assertNotIn("gen_ai.request.model", root)
+        self.assertNotIn("gen_ai.response.model", root)
+        self.assertNotIn("gen_ai.usage.input_tokens", root)
+        self.assertNotIn("gen_ai.usage.cache_read.input_tokens", root)
         self.assertEqual(
             json_attr(root, "gen_ai.input.messages"),
             [{"role": "user", "parts": [{"type": "text", "content": "list files"}]}],

@@ -292,7 +292,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.5",
+            "telemetry.sdk.version": "0.1.6",
             "agent_runtime": AGENT_RUNTIME,
             "agent_source": AGENT_RUNTIME,
             "agent_type": "assistant",
@@ -1451,7 +1451,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.5"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.6"), tracker
 
 
 @dataclass
@@ -1500,7 +1500,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.5")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.6")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1600,7 +1600,14 @@ def tool_command(tool_input: Any, max_chars: int) -> Optional[str]:
     return None
 
 
-def common_attrs(config: HookConfig, session_id: str, run_id: str, model: Optional[str]) -> Dict[str, Any]:
+def common_attrs(
+    config: HookConfig,
+    session_id: str,
+    run_id: str,
+    model: Optional[str],
+    *,
+    include_model: bool = True,
+) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {
         "session_id": session_id,
         "gen_ai.conversation.id": session_id,
@@ -1612,8 +1619,9 @@ def common_attrs(config: HookConfig, session_id: str, run_id: str, model: Option
         "run_ids": run_id,
         "status": "ok",
     }
-    attr_set(attrs, "gen_ai.request.model", model)
-    attr_set(attrs, "gen_ai.response.model", model)
+    if include_model:
+        attr_set(attrs, "gen_ai.request.model", model)
+        attr_set(attrs, "gen_ai.response.model", model)
     attr_set(attrs, "user_id", config.user_id)
     return attrs
 
@@ -1751,7 +1759,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     if active_skill and root_status == "error":
         active_skill.result_status = "error"
 
-    root_attrs: Dict[str, Any] = common_attrs(config, session_id, run_id, final_model)
+    root_attrs: Dict[str, Any] = common_attrs(config, session_id, run_id, final_model, include_model=False)
     root_attrs.update({
         "trace_name": f"Claude Code Turn {turn_num}",
         "gen_ai.operation.name": "invoke_agent",
@@ -1776,7 +1784,6 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
         "gen_ai.output.messages",
         build_output_messages(final_text, final_tool_uses, config.max_chars, get_stop_reason(turn.assistant_msgs[-1]) if turn.assistant_msgs else None),
     )
-    add_usage_attrs(root_attrs, total_usage)
     add_truncation_attrs(root_attrs, "input", user_meta)
 
     root = tracer.start_span("invoke_agent", start_time=to_ns(user_ts), attributes=clean_attrs(root_attrs))

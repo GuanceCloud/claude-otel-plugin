@@ -117,15 +117,29 @@ If no data is exported, check:
 
 ## Upgrade
 
-Refresh the marketplace and reload plugins:
+Refresh the marketplace, update the installed plugin, then reload plugins:
 
 ```text
 /plugin marketplace update claude-otel-plugin
+/plugin update claude-otel-plugin@claude-otel-plugin
 /reload-plugins
 ```
 
 For a local-path install, update the local checkout first, then run the same
-update and reload commands.
+plugin update and reload commands:
+
+```text
+/plugin marketplace update claude-otel-plugin
+/plugin update claude-otel-plugin@claude-otel-plugin
+/reload-plugins
+```
+
+After upgrading, verify the installed version:
+
+```text
+/plugin list
+/plugin details claude-otel-plugin@claude-otel-plugin
+```
 
 ## Uninstall
 
