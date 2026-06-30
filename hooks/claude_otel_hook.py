@@ -292,7 +292,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.7",
+            "telemetry.sdk.version": "0.1.8",
             "agent_runtime": AGENT_RUNTIME,
         },
     }
@@ -996,6 +996,47 @@ def detect_active_skill(turn: Turn, skill_catalog: Dict[str, Dict[str, Any]], se
     )
 
 
+def resolve_skill_invocation_from_tool(
+    tool: Dict[str, Any],
+    skill_catalog: Dict[str, Dict[str, Any]],
+    *,
+    cwd: Path,
+    session_id: str,
+    turn_num: int,
+) -> Optional[SkillInvocation]:
+    name = tool.get("name")
+    if not isinstance(name, str) or name != "Skill":
+        return None
+    tool_input = tool.get("input")
+    if not isinstance(tool_input, dict):
+        return None
+    requested_name = tool_input.get("skill")
+    if not isinstance(requested_name, str) or not requested_name.strip():
+        return None
+    requested_name = requested_name.strip()
+    skill = skill_catalog.get(requested_name)
+    if not skill:
+        resolved = resolve_skill_definition(requested_name, cwd, home=Path.home())
+        skill = {
+            "name": resolved.name,
+            "description": resolved.description,
+            "path": resolved.path,
+            "source_type": resolved.source_type,
+            "version": resolved.version,
+        }
+    tool_id = str(tool.get("id") or requested_name)
+    call_id = f"skillu_{hashlib.sha256(f'{session_id}:{turn_num}:{tool_id}:{requested_name}'.encode('utf-8')).hexdigest()[:16]}"
+    return SkillInvocation(
+        name=str(skill.get("name") or requested_name),
+        call_id=call_id,
+        description=str(skill.get("description")) if skill.get("description") else None,
+        path=str(skill.get("path")) if skill.get("path") else None,
+        source_type=str(skill.get("source_type")) if skill.get("source_type") else None,
+        version=str(skill.get("version")) if skill.get("version") else None,
+        result_status="completed",
+    )
+
+
 def to_ns(ts: Optional[datetime]) -> Optional[int]:
     if ts is None:
         return None
@@ -1449,7 +1490,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.7"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.8"), tracker
 
 
 @dataclass
@@ -1498,7 +1539,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.7")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.8")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1741,6 +1782,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     root_error_reason = None
     root_error_status_code = None
     active_skill = detect_active_skill(turn, skill_catalog or {}, session_id, turn_num)
+    skill_cwd = Path(cwd).expanduser() if isinstance(cwd, str) and cwd else Path.cwd()
     for assistant in turn.assistant_msgs:
         final_text = extract_text(get_content(assistant)) or final_text
         assistant_tool_uses = iter_tool_uses(get_content(assistant))
@@ -1873,6 +1915,13 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             tool_id = str(tool.get("id") or "")
             tool_name = str(tool.get("name") or "unknown")
             tool_raw_input = tool.get("input")
+            tool_skill = resolve_skill_invocation_from_tool(
+                tool,
+                skill_catalog or {},
+                cwd=skill_cwd,
+                session_id=session_id,
+                turn_num=turn_num,
+            )
             tool_input, tool_input_meta = truncate_text(tool.get("input"), config.max_chars)
             result = turn.tool_results_by_id.get(tool_id) if tool_id else None
             if result:
@@ -1902,7 +1951,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 "error.type": "_OTHER" if is_error else None,
                 "reason": compact_text(tool_output, config.max_chars) if is_error else None,
             })
-            apply_skill_attrs(tool_attrs, active_skill)
+            apply_skill_attrs(tool_attrs, tool_skill or active_skill)
             add_truncation_attrs(tool_attrs, "input", tool_input_meta)
             add_truncation_attrs(tool_attrs, "output", tool_output_meta)
             injected = turn.injected_by_tool_id.get(tool_id)
@@ -1917,7 +1966,28 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 start_time=to_ns(assistant_ts),
                 attributes=clean_attrs(tool_attrs),
             )
-            tool_span.end(end_time=to_ns(result_ts or assistant_ts))
+            tool_end_ns = to_ns(result_ts or assistant_ts)
+            tool_start_ns = to_ns(assistant_ts)
+            if tool_skill:
+                skill_attrs = common_attrs(config, session_id, run_id, model)
+                skill_attrs.update({
+                    "status": "error" if is_error else "ok",
+                    "error.type": "_OTHER" if is_error else None,
+                    "reason": compact_text(tool_output, config.max_chars) if is_error else None,
+                })
+                apply_skill_attrs(skill_attrs, tool_skill)
+                tool_context = trace_api.set_span_in_context(tool_span)
+                skill_span = tracer.start_span(
+                    f"skill:{tool_skill.name}",
+                    context=tool_context,
+                    start_time=tool_start_ns,
+                    attributes=clean_attrs(skill_attrs),
+                )
+                skill_end_ns = tool_end_ns
+                if skill_end_ns is not None and tool_start_ns is not None and skill_end_ns <= tool_start_ns:
+                    skill_end_ns = tool_start_ns + 1
+                skill_span.end(end_time=skill_end_ns)
+            tool_span.end(end_time=tool_end_ns)
             record_operation_metrics(metrics, tool_attrs, duration_s(assistant_ts, result_ts or assistant_ts), "execute_tool")
             batch_tool_results.append(
                 {

@@ -16,12 +16,17 @@ When the user explicitly invokes a slash skill such as `/review`, the hook also
 emits a sibling `skill:<name>` span under `invoke_agent` and copies unified
 skill tags onto both `skill:<name>` and related `tool:<name>` spans.
 
+When Claude invokes the built-in `Skill` tool with input such as
+`{"skill":"dashboard","args":"..."}`, the hook emits a nested
+`tool:Skill -> skill:<name>` span pair for that tool call.
+
 ```text
 invoke_agent
   skill:<name>
   llm
     assistant
     tool:<name>
+      skill:<name>
   llm
 ```
 
