@@ -842,6 +842,175 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(skill_span.attributes["gen_ai.skill.version"], "1.0.0")
         self.assertIs(skill_span.context, tool_span)
         self.assertGreater(skill_span.end_time - skill_span.start_time, 0)
+        self.assertGreater(tool_span.end_time - tool_span.start_time, 0)
+
+    def test_emit_turn_falls_back_to_tool_result_when_final_text_missing(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T04:34:00Z",
+                "message": {"role": "user", "content": "校验 dashboard"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-30T04:34:59Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "dqlcheck"}},
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T04:35:08Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": "The user doesn't want to proceed with this tool use.",
+                            "is_error": True,
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 68000,
+            },
+        ]
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+
+        hook.emit_turn(FakeTraceAPI, tracer, None, config, "session-1", 1, turn, Path("/tmp/session.jsonl"))
+
+        root = tracer.spans[0]
+        self.assertEqual(root.attributes["output_preview"], "The user doesn't want to proceed with this tool use.")
+
+    def test_emit_turn_forces_positive_tool_duration_when_result_timestamp_matches_start(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T03:38:28.848Z",
+                "cwd": "/home/liurui",
+                "message": {"content": "生成指标仪表板"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-30T03:38:34.764Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "Skill", "input": {"skill": "dashboard", "args": "生成仪表板"}},
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T03:38:34.764Z",
+                "toolUseResult": {"success": True, "commandName": "dashboard"},
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "Launching skill: dashboard"},
+                    ]
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 7739,
+            },
+        ]
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+        skill_catalog = {
+            "dashboard": {
+                "name": "dashboard",
+                "description": "生成观测云 Dashboard 仪表板。",
+                "path": "/home/liurui/.claude/skills/dashboard/SKILL.md",
+                "source_type": "user",
+                "version": "1.0.0",
+            }
+        }
+
+        hook.emit_turn(
+            FakeTraceAPI,
+            tracer,
+            None,
+            config,
+            "session-1",
+            1,
+            turn,
+            Path("/tmp/session.jsonl"),
+            skill_catalog=skill_catalog,
+        )
+
+        tool_span = next(span for span in tracer.spans if span.name == "tool:Skill")
+        self.assertGreater(tool_span.end_time - tool_span.start_time, 0)
 
     def test_emit_turn_produces_positive_durations_for_realistic_tool_turn(self):
         class FakeTraceAPI:

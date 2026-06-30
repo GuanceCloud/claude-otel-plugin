@@ -725,6 +725,47 @@ def build_output_messages(assistant_text: str, tool_uses: List[Dict[str, Any]], 
     return [message]
 
 
+def fallback_turn_output_preview(
+    final_text: str,
+    final_tool_uses: List[Dict[str, Any]],
+    tool_results_by_id: Dict[str, Dict[str, Any]],
+    max_chars: int,
+) -> Optional[str]:
+    if final_text:
+        return compact_text(final_text, max_chars)
+
+    errored_results = [
+        result for result in tool_results_by_id.values()
+        if isinstance(result, dict) and result.get("is_error")
+    ]
+    if errored_results:
+        return compact_text(errored_results[-1].get("content"), max_chars)
+
+    completed_results = [
+        result for result in tool_results_by_id.values()
+        if isinstance(result, dict) and result.get("content") not in (None, "")
+    ]
+    if completed_results:
+        return compact_text(completed_results[-1].get("content"), max_chars)
+
+    if final_tool_uses:
+        return compact_text(
+            {
+                "tool_calls": [
+                    {
+                        "id": tool.get("id"),
+                        "name": tool.get("name"),
+                        "input": tool.get("input"),
+                    }
+                    for tool in final_tool_uses
+                ]
+            },
+            max_chars,
+        )
+
+    return None
+
+
 def _content_block_key(block: Any) -> Tuple[str, str]:
     if isinstance(block, str):
         return ("str", block)
@@ -1799,13 +1840,14 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     if active_skill and root_status == "error":
         active_skill.result_status = "error"
 
+    root_output_preview = fallback_turn_output_preview(final_text, final_tool_uses, turn.tool_results_by_id, config.max_chars)
     root_attrs: Dict[str, Any] = common_attrs(config, session_id, run_id, final_model, include_model=False)
     root_attrs.update({
         "trace_name": f"Claude Code Turn {turn_num}",
         "gen_ai.operation.name": "invoke_agent",
         "input_preview": compact_text(user_text, config.max_chars),
         "input_length": len(user_text),
-        "output_preview": compact_text(final_text, config.max_chars),
+        "output_preview": root_output_preview,
         "output_length": len(final_text) if final_text else None,
         "tool_count": tool_count,
         "final_status": root_final_status,
@@ -1987,6 +2029,8 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 if skill_end_ns is not None and tool_start_ns is not None and skill_end_ns <= tool_start_ns:
                     skill_end_ns = tool_start_ns + 1
                 skill_span.end(end_time=skill_end_ns)
+            if tool_end_ns is not None and tool_start_ns is not None and tool_end_ns <= tool_start_ns:
+                tool_end_ns = tool_start_ns + 1
             tool_span.end(end_time=tool_end_ns)
             record_operation_metrics(metrics, tool_attrs, duration_s(assistant_ts, result_ts or assistant_ts), "execute_tool")
             batch_tool_results.append(
