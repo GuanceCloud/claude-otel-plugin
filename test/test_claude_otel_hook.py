@@ -415,6 +415,8 @@ class ClaudeOtelHookTest(unittest.TestCase):
         )
 
         self.assertEqual(attrs["agent_runtime"], "claude")
+        self.assertNotIn("agent_source", attrs)
+        self.assertNotIn("agent_type", attrs)
         self.assertEqual(attrs["gen_ai.agent.version"], "2.1.178")
         self.assertEqual(attrs["host"], "liurui")
         self.assertEqual(attrs["host.name"], "liurui")

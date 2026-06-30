@@ -292,10 +292,8 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.6",
+            "telemetry.sdk.version": "0.1.7",
             "agent_runtime": AGENT_RUNTIME,
-            "agent_source": AGENT_RUNTIME,
-            "agent_type": "assistant",
         },
     }
 
@@ -1451,7 +1449,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.6"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.7"), tracker
 
 
 @dataclass
@@ -1500,7 +1498,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.6")
+    meter = provider.get_meter("claude-otel-plugin", "0.1.7")
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
