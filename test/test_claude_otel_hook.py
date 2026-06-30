@@ -1012,6 +1012,98 @@ class ClaudeOtelHookTest(unittest.TestCase):
         tool_span = next(span for span in tracer.spans if span.name == "tool:Skill")
         self.assertGreater(tool_span.end_time - tool_span.start_time, 0)
 
+    def test_emit_turn_uses_tool_result_timestamp_when_duration_missing(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T06:14:34.112Z",
+                "message": {"content": "生成仪表板"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-30T06:14:40.361Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "Skill", "input": {"skill": "dashboard", "args": "生成仪表板"}},
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T06:14:41.878Z",
+                "toolUseResult": {"success": True, "commandName": "dashboard"},
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "Launching skill: dashboard"},
+                    ]
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "durationMs": 311922,
+            },
+        ]
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+        skill_catalog = {
+            "dashboard": {
+                "name": "dashboard",
+                "description": "生成观测云 Dashboard 仪表板。",
+                "path": "/home/liurui/.claude/skills/dashboard/SKILL.md",
+                "source_type": "user",
+                "version": "1.0.0",
+            }
+        }
+
+        hook.emit_turn(
+            FakeTraceAPI,
+            tracer,
+            None,
+            config,
+            "session-1",
+            1,
+            turn,
+            Path("/tmp/session.jsonl"),
+            skill_catalog=skill_catalog,
+        )
+
+        tool_span = next(span for span in tracer.spans if span.name == "tool:Skill")
+        skill_span = next(span for span in tracer.spans if span.name == "skill:dashboard")
+        self.assertEqual(tool_span.end_time - tool_span.start_time, 1_517_000_192)
+        self.assertEqual(skill_span.end_time - skill_span.start_time, 1_517_000_192)
+
     def test_emit_turn_produces_positive_durations_for_realistic_tool_turn(self):
         class FakeTraceAPI:
             @staticmethod

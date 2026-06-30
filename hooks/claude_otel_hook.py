@@ -40,6 +40,7 @@ DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
 AGENT_RUNTIME = "claude"
+PLUGIN_VERSION = "0.1.10"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -292,7 +293,7 @@ def resolve_config(
         "resourceAttributes": {
             "service.name": "gtrace-claude-code",
             "telemetry.sdk.name": "gtrace",
-            "telemetry.sdk.version": "0.1.8",
+            "telemetry.sdk.version": PLUGIN_VERSION,
             "agent_runtime": AGENT_RUNTIME,
         },
     }
@@ -1531,7 +1532,7 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
             export_timeout_millis=config.timeout_ms,
         )
     )
-    return trace, provider, provider.get_tracer("claude-otel-plugin", "0.1.8"), tracker
+    return trace, provider, provider.get_tracer("claude-otel-plugin", PLUGIN_VERSION), tracker
 
 
 @dataclass
@@ -1580,7 +1581,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             ),
         ],
     )
-    meter = provider.get_meter("claude-otel-plugin", "0.1.8")
+    meter = provider.get_meter("claude-otel-plugin", PLUGIN_VERSION)
     return MetricEmitters(
         provider=provider,
         workflow_duration=meter.create_histogram(
@@ -1621,11 +1622,16 @@ def duration_s(start: Optional[datetime], end: Optional[datetime]) -> Optional[f
 def add_duration(start: Optional[datetime], seconds: Optional[float] = None, milliseconds: Optional[float] = None) -> Optional[datetime]:
     if start is None:
         return None
+    has_delta = False
     delta = timedelta()
     if isinstance(seconds, (int, float)):
+        has_delta = True
         delta += timedelta(seconds=float(seconds))
     if isinstance(milliseconds, (int, float)):
+        has_delta = True
         delta += timedelta(milliseconds=float(milliseconds))
+    if not has_delta:
+        return None
     return start + delta
 
 
