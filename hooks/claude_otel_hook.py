@@ -40,7 +40,7 @@ DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
 AGENT_RUNTIME = "claude"
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -1212,6 +1212,7 @@ class Turn:
     tool_results_by_id: Dict[str, Dict[str, Any]]
     injected_by_tool_id: Dict[str, str]
     turn_duration_ms: Optional[float] = None
+    turn_duration_ts: Optional[datetime] = None
 
 
 def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) -> Tuple[List[Turn], List[Dict[str, Any]]]:
@@ -1223,6 +1224,7 @@ def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) 
     tool_results_by_id: Dict[str, Dict[str, Any]] = {}
     injected_by_tool_id: Dict[str, str] = {}
     turn_duration_ms: Optional[float] = None
+    turn_duration_ts: Optional[datetime] = None
 
     def flush() -> None:
         nonlocal current_user
@@ -1235,6 +1237,7 @@ def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) 
                 tool_results_by_id=dict(tool_results_by_id),
                 injected_by_tool_id=dict(injected_by_tool_id),
                 turn_duration_ms=turn_duration_ms,
+                turn_duration_ts=turn_duration_ts,
             )
         )
 
@@ -1279,6 +1282,7 @@ def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) 
             raw_duration_ms = msg.get("durationMs")
             if isinstance(raw_duration_ms, (int, float)) and raw_duration_ms >= 0:
                 turn_duration_ms = float(raw_duration_ms)
+                turn_duration_ts = parse_ts(msg)
             continue
 
         role = get_role(msg)
@@ -1291,6 +1295,7 @@ def _build_turns(messages: List[Dict[str, Any]], *, keep_incomplete_tail: bool) 
             tool_results_by_id = {}
             injected_by_tool_id = {}
             turn_duration_ms = None
+            turn_duration_ts = None
             continue
 
         if role == "assistant" and current_user is not None:
@@ -1764,6 +1769,8 @@ def record_operation_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str,
     if metric_attrs.get("gen_ai.operation.name") == "execute_tool":
         attr_set(metric_attrs, "gen_ai.tool.name", attrs.get("gen_ai.tool.name"))
         attr_set(metric_attrs, "tool_result_status", attrs.get("tool_result_status"))
+    if metric_attrs.get("gen_ai.operation.name") == "skill":
+        attr_set(metric_attrs, "gen_ai.skill.name", attrs.get("gen_ai.skill.name"))
     if duration is not None:
         metrics.operation_duration.record(duration, metric_attrs)
 
@@ -1808,6 +1815,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     user_text, user_meta = truncate_text(extract_text(get_content(turn.user_msg)), config.max_chars)
     user_ts = parse_ts(turn.user_msg)
     recorded_turn_end_ts = add_duration(user_ts, milliseconds=turn.turn_duration_ms)
+    turn_duration_event_ts = turn.turn_duration_ts
     observed_end_ts = turn_end_time(turn)
     latest_assistant_ts = latest_non_error_assistant_time(turn)
     if recorded_turn_end_ts or latest_assistant_ts:
@@ -1879,6 +1887,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
     if active_skill:
         skill_attrs = common_attrs(config, session_id, run_id, final_model)
         skill_attrs.update({
+            "gen_ai.operation.name": "skill",
             "status": root_status,
             "error.type": root_error_type,
             "reason": root_error_reason,
@@ -1892,6 +1901,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             attributes=clean_attrs(skill_attrs),
         )
         skill_span.end(end_time=to_ns(end_ts or user_ts))
+        record_operation_metrics(metrics, skill_attrs, duration_s(user_ts, end_ts or user_ts), "skill")
     prev_ts = user_ts
     prev_tool_results: List[Dict[str, Any]] = []
 
@@ -2019,6 +2029,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             if tool_skill:
                 skill_attrs = common_attrs(config, session_id, run_id, model)
                 skill_attrs.update({
+                    "gen_ai.operation.name": "skill",
                     "status": "error" if is_error else "ok",
                     "error.type": "_OTHER" if is_error else None,
                     "reason": compact_text(tool_output, config.max_chars) if is_error else None,
@@ -2035,6 +2046,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 if skill_end_ns is not None and tool_start_ns is not None and skill_end_ns <= tool_start_ns:
                     skill_end_ns = tool_start_ns + 1
                 skill_span.end(end_time=skill_end_ns)
+                record_operation_metrics(metrics, skill_attrs, duration_s(assistant_ts, result_ts or assistant_ts), "skill")
             if tool_end_ns is not None and tool_start_ns is not None and tool_end_ns <= tool_start_ns:
                 tool_end_ns = tool_start_ns + 1
             tool_span.end(end_time=tool_end_ns)
@@ -2052,7 +2064,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
         if assistant_text:
             assistant_end = generation_end or assistant_ts
             if not tool_uses:
-                assistant_end = max_ts(assistant_end, end_ts, recorded_turn_end_ts)
+                assistant_end = max_ts(assistant_end, end_ts, recorded_turn_end_ts, turn_duration_event_ts)
             assistant_attrs = common_attrs(config, session_id, run_id, model)
             assistant_attrs.update({
                 "gen_ai.operation.name": "chat",

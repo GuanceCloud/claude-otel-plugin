@@ -321,11 +321,23 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(pending_messages, messages)
 
         turns, pending_messages = hook.build_turns_with_pending(
-            messages + [{"type": "system", "subtype": "turn_duration", "durationMs": 1447}]
+            messages
+            + [
+                {
+                    "type": "system",
+                    "subtype": "turn_duration",
+                    "timestamp": "2026-06-25T09:18:26.978Z",
+                    "durationMs": 1447,
+                }
+            ]
         )
 
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0].turn_duration_ms, 1447)
+        self.assertEqual(
+            turns[0].turn_duration_ts.isoformat(),
+            "2026-06-25T09:18:26.978000+00:00",
+        )
         self.assertEqual(pending_messages, [])
 
     def test_build_turns_merges_repeated_assistant_snapshots_by_message_id(self):
@@ -1104,6 +1116,77 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(tool_span.end_time - tool_span.start_time, 1_517_000_192)
         self.assertEqual(skill_span.end_time - skill_span.start_time, 1_517_000_192)
 
+    def test_emit_turn_extends_final_assistant_to_turn_duration_event_timestamp(self):
+        class FakeTraceAPI:
+            @staticmethod
+            def set_span_in_context(span):
+                return span
+
+        class FakeSpan:
+            def __init__(self, name, attributes, start_time=None):
+                self.name = name
+                self.attributes = attributes
+                self.start_time = start_time
+                self.end_time = None
+
+            def end(self, end_time=None):
+                self.end_time = end_time
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class FakeTracer:
+            def __init__(self):
+                self.spans = []
+
+            def start_span(self, name, context=None, start_time=None, attributes=None):
+                span = FakeSpan(name, attributes or {}, start_time=start_time)
+                self.spans.append(span)
+                return span
+
+        messages = [
+            {
+                "type": "user",
+                "timestamp": "2026-06-30T06:44:08.020Z",
+                "message": {"content": "执行成功了吗"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-30T06:48:24.704Z",
+                "message": {
+                    "id": "msg-1",
+                    "model": "claude-test",
+                    "content": [{"type": "text", "text": "部分成功了"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "turn_duration",
+                "timestamp": "2026-06-30T06:48:32.438Z",
+                "durationMs": 199404,
+            },
+        ]
+        turn = hook.build_turns(messages)[0]
+        config = hook.resolve_config(env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"})
+        tracer = FakeTracer()
+
+        hook.emit_turn(
+            FakeTraceAPI,
+            tracer,
+            None,
+            config,
+            "session-1",
+            1,
+            turn,
+            Path("/tmp/session.jsonl"),
+        )
+
+        assistant_span = next(span for span in tracer.spans if span.name == "assistant")
+        expected_end = hook.to_ns(hook.parse_ts("2026-06-30T06:48:32.438Z"))
+        self.assertEqual(assistant_span.end_time, expected_end)
+        self.assertGreater(assistant_span.end_time - assistant_span.start_time, 0)
+
     def test_emit_turn_produces_positive_durations_for_realistic_tool_turn(self):
         class FakeTraceAPI:
             @staticmethod
@@ -1402,10 +1485,16 @@ class ClaudeOtelHookTest(unittest.TestCase):
             "gen_ai.tool.name": "Bash",
             "tool_result_status": "completed",
         }
+        skill_attrs = {
+            **llm_attrs,
+            "gen_ai.operation.name": "skill",
+            "gen_ai.skill.name": "dashboard",
+        }
 
         hook.record_request_metrics(metrics, {**llm_attrs, "final_status": "completed"}, 1.5)
         hook.record_operation_metrics(metrics, llm_attrs, 0.25, "chat")
         hook.record_operation_metrics(metrics, tool_attrs, 0.5, "execute_tool")
+        hook.record_operation_metrics(metrics, skill_attrs, 0.75, "skill")
         hook.record_token_metrics(metrics, llm_attrs)
 
         self.assertEqual(metrics.workflow_duration.records[0][0], 1.5)
@@ -1414,6 +1503,8 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(metrics.operation_duration.records[0][1]["gen_ai.operation.name"], "chat")
         self.assertEqual(metrics.operation_duration.records[1][1]["gen_ai.operation.name"], "execute_tool")
         self.assertEqual(metrics.operation_duration.records[1][1]["gen_ai.tool.name"], "Bash")
+        self.assertEqual(metrics.operation_duration.records[2][1]["gen_ai.operation.name"], "skill")
+        self.assertEqual(metrics.operation_duration.records[2][1]["gen_ai.skill.name"], "dashboard")
         self.assertEqual(
             [attrs["gen_ai.token.type"] for _, attrs in metrics.token_usage.records],
             ["input", "output"],
