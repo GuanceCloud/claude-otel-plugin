@@ -15,11 +15,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          echo "release_version=${GITHUB_REF_NAME#claude-otel-plugin--v}" >> "$GITHUB_OUTPUT"
 
       - name: Check tag matches plugin version
         run: |
@@ -43,10 +50,14 @@ jobs:
       - name: Prepare release installer
         run: cp scripts/install-release.sh dist/install-release.sh
 
+      - name: Generate release notes
+        run: scripts/render-release-notes.sh "${GITHUB_REF_NAME}" > dist/release-notes.md
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: ${{ steps.meta.outputs.release_version }}
+          body_path: dist/release-notes.md
           files: |
             dist/claude-otel-plugin.tar.gz
             dist/claude-otel-plugin.tar.gz.sha256
