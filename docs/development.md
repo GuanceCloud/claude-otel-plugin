@@ -32,7 +32,7 @@ git push origin <tag>
 Pushing a tag in the form `claude-otel-plugin--v<version>` triggers the GitHub
 Actions release workflow. The workflow checks that the tag version matches
 `.claude-plugin/plugin.json`, runs the test suite, then uploads the release
-assets.
+assets, including `install-release.sh` and the packaged installer scripts.
 
 ## Layout
 

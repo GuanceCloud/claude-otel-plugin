@@ -27,6 +27,7 @@ mkdir -p "${DIST_DIR}" "${PACKAGE_ROOT}"
 cp -R "${ROOT_DIR}/.claude-plugin" "${PACKAGE_ROOT}/.claude-plugin"
 cp -R "${ROOT_DIR}/hooks" "${PACKAGE_ROOT}/hooks"
 cp -R "${ROOT_DIR}/docs" "${PACKAGE_ROOT}/docs"
+cp -R "${ROOT_DIR}/scripts" "${PACKAGE_ROOT}/scripts"
 cp "${ROOT_DIR}/README.md" "${PACKAGE_ROOT}/README.md"
 
 find "${PACKAGE_ROOT}" -type d -name "__pycache__" -prune -exec rm -rf {} +

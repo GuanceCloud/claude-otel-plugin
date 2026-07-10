@@ -35,19 +35,29 @@ No manual `pip install` is required. The fallback requirement is a working
 Recommended customer install:
 
 ```bash
-curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
+  | bash -s -- latest \
+      --endpoint https://llm-openway.guance.com \
+      --x-token <token> \
+      --tag env=prod \
+      --tag agent_id=claude-monitor \
+      --tag agent_name=Claude
 ```
 
 Install a specific released version:
 
 ```bash
-curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh -s -- 0.1.12
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
+  | bash -s -- 0.1.13 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 The release installer downloads a GitHub Release package, verifies the SHA-256
 checksum when a checksum tool is available, expands the package locally, copies
 it to `~/.claude/marketplaces/claude-otel-plugin-release`, then installs or
-updates `claude-otel-plugin` from that persistent marketplace source.
+updates `claude-otel-plugin` from that persistent marketplace source. Installer
+parameters are forwarded to `scripts/install.sh`, so install-time configuration
+is applied both to Claude plugin `userConfig` and to `~/.claude/gtrace.json`
+unless `--no-config` is used.
 
 You can also run the same flow manually from inside Claude Code:
 
@@ -62,8 +72,42 @@ access to `GuanceCloud/claude-otel-plugin`.
 For a local checkout, you can also run:
 
 ```bash
-sh scripts/install.sh
+bash scripts/install.sh . --endpoint https://llm-openway.guance.com --x-token <token>
 ```
+
+## Installer Options
+
+All installers forward the same options to `scripts/install.sh`:
+
+```text
+--scope user|project|local
+--type gtrace|otlp
+--endpoint URL
+--x-token TOKEN
+--trace-path PATH
+--metrics-path PATH
+--header KEY=VALUE
+--tag KEY=VALUE
+--timeout-ms N
+--user-id VALUE
+--max-chars N
+--debug | --no-debug
+--enabled BOOL
+--config-file PATH
+--no-config
+```
+
+Notes:
+
+- `--tag` writes `resourceAttributes`.
+- `--header` appends extra OTLP HTTP headers.
+- `--x-token` is mapped to `headers.X-Token`.
+- `gtrace` mode defaults to:
+  - `tracePath = v1/write/otel-llm`
+  - `metricsPath = v1/write/otel-metrics`
+- `otlp` mode defaults to:
+  - `tracePath = v1/traces`
+  - `metricsPath = v1/metrics`
 
 ## Configure Export
 
@@ -115,7 +159,7 @@ claude plugin validate .
 The helper script wraps the same flow:
 
 ```bash
-sh scripts/install.sh /path/to/claude-otel-plugin
+bash scripts/install.sh /path/to/claude-otel-plugin --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 For release engineering, build the package locally with:

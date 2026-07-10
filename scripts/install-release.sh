@@ -1,10 +1,8 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
 REPO="GuanceCloud/claude-otel-plugin"
-PLUGIN_ID="claude-otel-plugin@claude-otel-plugin"
-MARKETPLACE_NAME="claude-otel-plugin"
 VERSION_INPUT="${1:-latest}"
 TMP_DIR=$(mktemp -d)
 INSTALL_ROOT="${HOME}/.claude/marketplaces/claude-otel-plugin-release"
@@ -40,6 +38,22 @@ EOF
   exit 1
 fi
 
+case "${1:-}" in
+  -h|--help)
+    cat <<EOF
+Usage:
+  install-release.sh [latest|vX.Y.Z|X.Y.Z] [install options]
+
+Examples:
+  curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \\
+    | bash -s -- latest --endpoint https://llm-openway.guance.com --x-token <token>
+
+Install options are passed to scripts/install.sh.
+EOF
+    exit 0
+    ;;
+esac
+
 normalize_tag() {
   case "$1" in
     latest)
@@ -58,6 +72,10 @@ normalize_tag() {
 }
 
 TAG=$(normalize_tag "${VERSION_INPUT}")
+
+if [[ "$#" -gt 0 && "$1" != --* ]]; then
+  shift
+fi
 
 if [ "${TAG}" = "latest" ]; then
   BASE_URL="https://github.com/${REPO}/releases/latest/download"
@@ -96,24 +114,13 @@ if [ ! -f "${PACKAGE_DIR}/.claude-plugin/marketplace.json" ]; then
   exit 1
 fi
 
+if [ ! -f "${PACKAGE_DIR}/scripts/install.sh" ]; then
+  echo "release package is missing scripts/install.sh" >&2
+  exit 1
+fi
+
 rm -rf "${INSTALL_ROOT}"
 mkdir -p "$(dirname "${INSTALL_ROOT}")"
 cp -R "${PACKAGE_DIR}" "${INSTALL_ROOT}"
 
-claude plugin marketplace remove "${MARKETPLACE_NAME}" >/dev/null 2>&1 || true
-claude plugin marketplace add "${INSTALL_ROOT}" >/dev/null 2>&1 || true
-claude plugin marketplace update "${MARKETPLACE_NAME}" >/dev/null 2>&1 || true
-
-if claude plugin list --json | grep -q "\"id\": \"${PLUGIN_ID}\""; then
-  claude plugin update "${PLUGIN_ID}"
-else
-  claude plugin install "${PLUGIN_ID}"
-fi
-
-cat <<EOF
-Plugin installed from release: ${TAG}
-Source path: ${INSTALL_ROOT}
-
-Next step:
-- Restart Claude Code to apply the updated plugin.
-EOF
+bash "${INSTALL_ROOT}/scripts/install.sh" "${INSTALL_ROOT}" --refresh "$@"

@@ -49,13 +49,20 @@ Requirements:
 Customer install, one command:
 
 ```bash
-curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
+  | bash -s -- latest \
+      --endpoint https://llm-openway.guance.com \
+      --x-token <token> \
+      --tag env=prod \
+      --tag agent_id=claude-monitor \
+      --tag agent_name=Claude
 ```
 
 Install a specific release:
 
 ```bash
-curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh -s -- 0.1.12
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
+  | bash -s -- 0.1.13 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 Or add the marketplace and install the plugin from inside Claude Code:
@@ -68,7 +75,7 @@ Or add the marketplace and install the plugin from inside Claude Code:
 Or install from a local checkout:
 
 ```bash
-sh scripts/install.sh
+bash scripts/install.sh . --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 Write the export config:
@@ -101,6 +108,9 @@ Restart Claude Code to apply the plugin.
 The plugin no longer requires manual `pip install`. If `uv` is unavailable, the
 hook bootstraps a private virtual environment under
 `~/.claude/state/claude-otel-plugin-runtime/venv` on first run.
+
+The installers also accept `--trace-path`, `--metrics-path`, `--header`,
+`--tag`, `--timeout-ms`, `--user-id`, `--max-chars`, and `--no-config`.
 
 Release artifacts are built from tagged versions and published as GitHub
 Release assets. The recommended customer install path uses those assets instead

@@ -1,38 +1,42 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
-PLUGIN_ID="claude-otel-plugin@claude-otel-plugin"
-MARKETPLACE_NAME="claude-otel-plugin"
-MARKETPLACE_SOURCE="${1:-GuanceCloud/claude-otel-plugin}"
+REPO="${CLAUDE_OTEL_REPO:-GuanceCloud/claude-otel-plugin}"
+REF="${CLAUDE_OTEL_REF:-main}"
+RAW_BASE_URL="${CLAUDE_OTEL_RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO}/${REF}}"
+TMP_DIR="$(mktemp -d)"
 
-if ! command -v claude >/dev/null 2>&1; then
-  echo "claude CLI not found in PATH" >&2
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+
+trap cleanup EXIT INT TERM
+
+case "${1:-}" in
+  -h|--help)
+    cat <<EOF
+Usage:
+  install-remote.sh [install options]
+
+Examples:
+  curl -fsSL https://raw.githubusercontent.com/GuanceCloud/claude-otel-plugin/main/scripts/install-remote.sh \\
+    | bash -s -- --endpoint https://llm-openway.guance.com --x-token <token>
+
+Install options are passed to scripts/install.sh.
+EOF
+    exit 0
+    ;;
+esac
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl not found in PATH" >&2
   exit 1
 fi
 
-if ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
-  cat >&2 <<'EOF'
-Either `uv` or `python3` is required.
+INSTALL_URL="${RAW_BASE_URL}/scripts/install.sh"
+INSTALL_SCRIPT="${TMP_DIR}/install.sh"
+curl -fsSL "${INSTALL_URL}" -o "${INSTALL_SCRIPT}"
+chmod +x "${INSTALL_SCRIPT}"
 
-- Preferred: install uv from https://astral.sh/uv/
-- Fallback: ensure python3 >= 3.10 is available in PATH
-EOF
-  exit 1
-fi
-
-claude plugin marketplace add "${MARKETPLACE_SOURCE}" >/dev/null 2>&1 || true
-claude plugin marketplace update "${MARKETPLACE_NAME}" >/dev/null 2>&1 || true
-
-if claude plugin list --json | grep -q "\"id\": \"${PLUGIN_ID}\""; then
-  claude plugin update "${PLUGIN_ID}"
-else
-  claude plugin install "${PLUGIN_ID}"
-fi
-
-cat <<'EOF'
-Plugin installed.
-
-Next step:
-- Restart Claude Code to apply the updated plugin.
-EOF
+bash "${INSTALL_SCRIPT}" "${REPO}" "$@"
