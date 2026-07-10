@@ -6,8 +6,7 @@ for `claude-otel-plugin`.
 ## Requirements
 
 - Claude Code with plugin support
-- Python 3.10+
-- `uv` recommended
+- `uv` recommended, or `python3 >= 3.10`
 
 `hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. When `uv` is on
 `PATH`, Claude Code runs the hook with:
@@ -22,28 +21,49 @@ Install `uv`:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Without `uv`, the hook falls back to `python3`, and that Python environment must
-already have:
+Without `uv`, the plugin bootstraps a private virtual environment under:
 
-```bash
-pip install "opentelemetry-api>=1.25,<2" \
-  "opentelemetry-sdk>=1.25,<2" \
-  "opentelemetry-exporter-otlp-proto-http>=1.25,<2"
+```text
+~/.claude/state/claude-otel-plugin-runtime/venv
 ```
+
+No manual `pip install` is required. The fallback requirement is a working
+`python3` with the standard `venv` module available.
 
 ## Remote Install
 
-From inside Claude Code, add this GitHub repository as a plugin marketplace and
-install the plugin:
+Recommended customer install:
+
+```bash
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh
+```
+
+Install a specific released version:
+
+```bash
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh -s -- 0.1.12
+```
+
+The release installer downloads a GitHub Release package, verifies the SHA-256
+checksum when a checksum tool is available, expands the package locally, copies
+it to `~/.claude/marketplaces/claude-otel-plugin-release`, then installs or
+updates `claude-otel-plugin` from that persistent marketplace source.
+
+You can also run the same flow manually from inside Claude Code:
 
 ```text
 /plugin marketplace add GuanceCloud/claude-otel-plugin
 /plugin install claude-otel-plugin@claude-otel-plugin
-/reload-plugins
 ```
 
 If the repository is private, the machine running Claude Code must have GitHub
 access to `GuanceCloud/claude-otel-plugin`.
+
+For a local checkout, you can also run:
+
+```bash
+sh scripts/install.sh
+```
 
 ## Configure Export
 
@@ -59,7 +79,7 @@ cat > ~/.claude/gtrace.json <<'JSON'
   "metricsPath": "v1/write/otel-metrics",
   "headers": {
     "X-Token": "<token>",
-    "To-Headless": "true"
+    "to_headless": "true"
   },
   "resourceAttributes": {
     "env": "prod",
@@ -72,11 +92,7 @@ JSON
 
 `resourceAttributes` are exported as shared resource tags on traces and metrics.
 
-After configuration, restart Claude Code or run:
-
-```text
-/reload-plugins
-```
+After configuration, restart Claude Code.
 
 The hook starts processing transcripts after Claude Code emits `Stop` or
 `SessionEnd` events.
@@ -88,13 +104,24 @@ For development or local testing, add a local checkout:
 ```text
 /plugin marketplace add /path/to/claude-otel-plugin
 /plugin install claude-otel-plugin@claude-otel-plugin
-/reload-plugins
 ```
 
 You can validate the marketplace first:
 
 ```bash
 claude plugin validate .
+```
+
+The helper script wraps the same flow:
+
+```bash
+sh scripts/install.sh /path/to/claude-otel-plugin
+```
+
+For release engineering, build the package locally with:
+
+```bash
+sh scripts/package-release.sh
 ```
 
 ## Minimal Check
@@ -109,29 +136,27 @@ After installation, check:
 If no data is exported, check:
 
 - The plugin is installed and enabled.
-- `uv`, or a `python3` environment with OpenTelemetry dependencies, is available
-  to non-interactive shells.
+- `uv`, or `python3 >= 3.10`, is available to non-interactive shells.
+- If `uv` is absent, `python3 -m venv` works on the machine.
 - `~/.claude/gtrace.json` has `"enabled": true`.
 - `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
-- Claude Code was restarted or `/reload-plugins` was run.
+- Claude Code was restarted after install or upgrade.
 
 ## Upgrade
 
-Refresh the marketplace, update the installed plugin, then reload plugins:
+Refresh the marketplace, update the installed plugin, then restart Claude Code:
 
 ```text
 /plugin marketplace update claude-otel-plugin
 /plugin update claude-otel-plugin@claude-otel-plugin
-/reload-plugins
 ```
 
 For a local-path install, update the local checkout first, then run the same
-plugin update and reload commands:
+plugin update commands and restart Claude Code:
 
 ```text
 /plugin marketplace update claude-otel-plugin
 /plugin update claude-otel-plugin@claude-otel-plugin
-/reload-plugins
 ```
 
 After upgrading, verify the installed version:

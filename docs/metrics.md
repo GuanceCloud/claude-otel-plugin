@@ -2,15 +2,17 @@
 
 本文档说明 `claude-otel-plugin` 当前实际输出的指标、标签口径，以及旧指标到新指标的迁移关系。
 
-指标与 trace 使用同一份 turn 解析结果，但三类指标的标签并不完全相同。阅读和建图时，建议按指标类型分别理解。
+指标与 trace 使用同一份 turn 解析结果，但五类指标的标签并不完全相同。阅读和建图时，建议按指标类型分别理解。
 
 ## 指标列表
 
-插件当前输出 3 个 OpenTelemetry GenAI 指标：
+插件当前输出 5 个 OpenTelemetry GenAI 指标：
 
 | Metric | Type | Unit | 来源 |
 | --- | --- | --- | --- |
 | `gen_ai.workflow.duration` | Histogram | `s` | 整个 turn，对应根 span `invoke_agent` |
+| `gen_ai.agent.operation.count` | Counter | 空 | 单次操作计数，对齐 Codex agent operation 口径 |
+| `gen_ai.agent.operation.duration` | Histogram | `ms` | 单次操作耗时，对齐 Codex agent operation 口径 |
 | `gen_ai.client.operation.duration` | Histogram | `s` | 单次操作，对应 `chat` / `execute_tool` / `skill` |
 | `gen_ai.client.token.usage` | Histogram | `{token}` | 仅 LLM token 用量 |
 
@@ -37,7 +39,93 @@
 - `final_status` 取值通常为 `completed` / `error` / `cancelled` / `unset`
 - 该指标刻意不携带 `gen_ai.request.model` 和 `gen_ai.response.model`
 
-### 2. `gen_ai.client.operation.duration`
+### 2. `gen_ai.agent.operation.count`
+
+表示 agent 侧子操作计数。该指标参考 Codex 插件的 `gen_ai.agent.operation.count` 设计，并同时输出 AM 看板使用的扁平标签别名。
+
+基础标签：
+
+- `agent_runtime`
+- `session_id`
+- `gen_ai.conversation.id`
+- `host`
+- `host.name`
+- `gen_ai.operation.name`
+- `outcome`
+
+AM 兼容别名：
+
+- `operation_name`
+- `provider_name`
+- `request_model`
+- `response_model`
+- `model_name`
+
+按类型追加的标签：
+
+- 当 `gen_ai.operation.name=chat` 时：
+  - `gen_ai.provider.name`
+  - `gen_ai.request.model`
+  - `gen_ai.response.model`
+- 当 `gen_ai.operation.name=execute_tool` 时：
+  - `gen_ai.tool.name`
+  - `tool_name`
+- 当 `gen_ai.operation.name=skill` 时：
+  - `gen_ai.skill.name`
+  - `skill_name`
+  - `skill_source`
+  - `skill_source_type`
+  - `skill_result_status`
+
+错误相关标签：
+
+- 当 `outcome=error` 时，上报 `error.type`
+- 如果没有明确错误类型，`error.type` 使用 `_OTHER`
+
+### 3. `gen_ai.agent.operation.duration`
+
+表示 agent 侧子操作耗时。该指标参考 Codex 插件的 `gen_ai.agent.operation.duration` 设计，单位为毫秒，并同时输出 AM 看板使用的扁平标签别名。
+
+基础标签：
+
+- `agent_runtime`
+- `session_id`
+- `gen_ai.conversation.id`
+- `gen_ai.provider.name`
+- `gen_ai.request.model`
+- `gen_ai.response.model`
+- `host`
+- `host.name`
+- `gen_ai.operation.name`
+- `outcome`
+
+AM 兼容别名：
+
+- `operation_name`
+- `provider_name`
+- `request_model`
+- `response_model`
+- `model_name`
+
+按类型追加的标签：
+
+- 当 `gen_ai.operation.name=execute_tool` 时：
+  - `gen_ai.tool.name`
+  - `tool_name`
+  - `tool_result_status`
+- 当 `gen_ai.operation.name=skill` 时：
+  - `gen_ai.skill.name`
+  - `skill_name`
+  - `skill_source`
+  - `skill_source_type`
+  - `skill_result_status`
+
+错误相关标签：
+
+- 当 `outcome=error` 时，上报 `error.type`
+- 如果没有明确错误类型，`error.type` 使用 `_OTHER`
+
+### 4. `gen_ai.client.operation.duration`
 
 表示一次子操作耗时。当前操作类型分为：
 
@@ -74,7 +162,7 @@
 - `skill` 被当作一类特殊操作，不再混在普通 `tool` 指标里理解
 - 对 skill 调用，trace 结构是 `llm -> tool:Skill -> skill:<name>`；指标里会单独生成一条 `operation.name=skill`
 
-### 3. `gen_ai.client.token.usage`
+### 5. `gen_ai.client.token.usage`
 
 表示 LLM token 用量。
 
@@ -123,6 +211,8 @@
 
 模型标签只存在于：
 
+- `gen_ai.agent.operation.count` 的 `gen_ai.operation.name=chat` 序列
+- `gen_ai.agent.operation.duration`
 - `gen_ai.client.operation.duration`
 - `gen_ai.client.token.usage`
 
@@ -139,9 +229,9 @@
 | Trace Span | 指标 |
 | --- | --- |
 | `invoke_agent` | `gen_ai.workflow.duration` |
-| `llm` | `gen_ai.client.operation.duration` with `gen_ai.operation.name=chat` |
-| `tool:<name>` | `gen_ai.client.operation.duration` with `gen_ai.operation.name=execute_tool` |
-| `skill:<name>` | `gen_ai.client.operation.duration` with `gen_ai.operation.name=skill` |
+| `llm` | `gen_ai.agent.operation.*` with `gen_ai.operation.name=chat`; `gen_ai.client.operation.duration` with `gen_ai.operation.name=chat` |
+| `tool:<name>` | `gen_ai.agent.operation.*` with `gen_ai.operation.name=execute_tool`; `gen_ai.client.operation.duration` with `gen_ai.operation.name=execute_tool` |
+| `skill:<name>` | `gen_ai.agent.operation.*` with `gen_ai.operation.name=skill`; `gen_ai.client.operation.duration` with `gen_ai.operation.name=skill` |
 
 补充说明：
 
@@ -154,15 +244,15 @@
 | --- | --- |
 | `gen_ai.agent.request.count` | Removed |
 | `gen_ai.agent.request.duration` | `gen_ai.workflow.duration` |
-| `gen_ai.agent.operation.count` | Removed |
-| `gen_ai.agent.operation.duration` | `gen_ai.client.operation.duration` |
+| `gen_ai.agent.operation.count` | 已恢复，用于兼容 Codex agent operation 指标 |
+| `gen_ai.agent.operation.duration` | 已恢复，用于兼容 Codex agent operation 指标；同时继续输出 `gen_ai.client.operation.duration` |
 | `gen_ai.agent.token.usage` | `gen_ai.client.token.usage` |
-| duration unit `ms` | duration unit `s` |
-| `provider_name` | `gen_ai.provider.name` |
-| `model_name` | `gen_ai.request.model`, `gen_ai.response.model` |
-| `operation_name` | `gen_ai.operation.name` |
-| `tool_name` | `gen_ai.tool.name` |
-| `skill_name` | `gen_ai.skill.name` |
+| duration unit `ms` | 保留在 `gen_ai.agent.operation.duration`；`gen_ai.client.operation.duration` 使用 `s` |
+| `provider_name` | 在 `gen_ai.agent.operation.*` 中作为 AM 别名保留；语义源为 `gen_ai.provider.name` |
+| `model_name` | 在 `gen_ai.agent.operation.*` 中作为 AM 别名保留；语义源为 `gen_ai.response.model` 或 `gen_ai.request.model` |
+| `operation_name` | 在 `gen_ai.agent.operation.*` 中作为 AM 别名保留；语义源为 `gen_ai.operation.name` |
+| `tool_name` | 在 `gen_ai.agent.operation.*` 中作为 AM 别名保留；语义源为 `gen_ai.tool.name` |
+| `skill_name` | 在 `gen_ai.agent.operation.*` 中作为 AM 别名保留；语义源为 `gen_ai.skill.name` |
 | `token_type` | `gen_ai.token.type` |
 | `token_type=total/cache_read/cache_total/reasoning` | Removed |
 | `agent_source` | Removed |

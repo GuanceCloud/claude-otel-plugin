@@ -40,7 +40,7 @@ DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
 AGENT_RUNTIME = "claude"
-PLUGIN_VERSION = "0.1.11"
+PLUGIN_VERSION = "0.1.12"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -239,6 +239,22 @@ class TraceExportTracker:
     had_failure: bool = False
     last_result: Optional[str] = None
     last_error: Optional[str] = None
+    last_http_status: Optional[int] = None
+    last_http_reason: Optional[str] = None
+    last_http_body: Optional[str] = None
+
+    def export_ok(self, emitted: int) -> bool:
+        if emitted <= 0:
+            return True
+        return self.export_calls > 0 and not self.had_failure
+
+
+@dataclass
+class MetricExportTracker:
+    export_calls: int = 0
+    had_failure: bool = False
+    last_result: Optional[str] = None
+    last_error: Optional[str] = None
 
     def export_ok(self, emitted: int) -> bool:
         if emitted <= 0:
@@ -271,6 +287,48 @@ class TrackingSpanExporter:
 
     def shutdown(self) -> Any:
         return self._exporter.shutdown()
+
+
+def track_http_exporter_response(exporter: Any, tracker: TraceExportTracker) -> Any:
+    original_export = getattr(exporter, "_export", None)
+    if not callable(original_export):
+        return exporter
+
+    def export(*args: Any, **kwargs: Any) -> Any:
+        response = original_export(*args, **kwargs)
+        tracker.last_http_status = getattr(response, "status_code", None)
+        reason = getattr(response, "reason", None)
+        tracker.last_http_reason = str(reason) if reason not in (None, "") else None
+        try:
+            text = getattr(response, "text", None)
+        except Exception:
+            text = None
+        if text:
+            tracker.last_http_body = str(text)[:500]
+        return response
+
+    exporter._export = export
+    return exporter
+
+
+def track_metric_exporter(exporter: Any, tracker: MetricExportTracker) -> Any:
+    original_export = exporter.export
+
+    def export(*args: Any, **kwargs: Any) -> Any:
+        tracker.export_calls += 1
+        try:
+            result = original_export(*args, **kwargs)
+        except Exception as exc:
+            tracker.had_failure = True
+            tracker.last_error = f"{type(exc).__name__}: {exc}"
+            raise
+        tracker.last_result = getattr(result, "name", str(result))
+        if tracker.last_result != "SUCCESS":
+            tracker.had_failure = True
+        return result
+
+    exporter.export = export
+    return exporter
 
 
 def resolve_config(
@@ -1443,6 +1501,55 @@ def add_usage_attrs(attrs: Dict[str, Any], usage: Dict[str, int]) -> None:
             attr_set(attrs, dst, usage[src])
 
 
+def gtrace_usage(usage: Optional[Dict[str, int]], attrs: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    if usage:
+        for src, dst in (
+            ("input", "input"),
+            ("output", "output"),
+            ("total", "total"),
+            ("cache_read_input_tokens", "cache_read_input_tokens"),
+            ("cache_creation_input_tokens", "cache_creation_input_tokens"),
+        ):
+            value = usage.get(src)
+            if isinstance(value, int):
+                out[dst] = value
+    if attrs:
+        for src, dst in (
+            ("gen_ai.usage.input_tokens", "input"),
+            ("gen_ai.usage.output_tokens", "output"),
+            ("gen_ai.usage.cache_read.input_tokens", "cache_read_input_tokens"),
+            ("gen_ai.usage.cache_creation.input_tokens", "cache_creation_input_tokens"),
+        ):
+            value = attrs.get(src)
+            if isinstance(value, int):
+                out[dst] = value
+    if ("input" in out or "output" in out) and "total" not in out:
+        out["total"] = out.get("input", 0) + out.get("output", 0)
+    return out
+
+
+def add_gtrace_attrs(
+    attrs: Dict[str, Any],
+    observation_type: str,
+    *,
+    model: Optional[str] = None,
+    usage: Optional[Dict[str, int]] = None,
+) -> None:
+    attr_set(attrs, "gtrace.trace.name", attrs.get("trace_name"))
+    attr_set(attrs, "gtrace.observation.type", observation_type)
+    attr_set(attrs, "gtrace.observation.input", attrs.get("input_preview"))
+    attr_set(attrs, "gtrace.observation.output", attrs.get("output_preview"))
+    attr_set(
+        attrs,
+        "gtrace.model.name",
+        model or attrs.get("gen_ai.response.model") or attrs.get("gen_ai.request.model"),
+    )
+    normalized_usage = gtrace_usage(usage, attrs)
+    if normalized_usage:
+        attr_set(attrs, "gtrace.usage", normalized_usage)
+
+
 def turn_end_time(turn: Turn) -> Optional[datetime]:
     candidates = [parse_ts(msg) for msg in turn.assistant_msgs]
     for result in turn.tool_results_by_id.values():
@@ -1483,6 +1590,10 @@ def extract_runtime_metadata(messages: List[Dict[str, Any]], payload: Dict[str, 
 def runtime_resource_attributes(config: HookConfig, runtime: RuntimeMetadata) -> Dict[str, Any]:
     attrs = dict(config.resource_attributes)
     attrs.setdefault("agent_runtime", AGENT_RUNTIME)
+    if attrs.get("agent_id") and not attrs.get("app_id"):
+        attrs["app_id"] = attrs["agent_id"]
+    if attrs.get("agent_name") and not attrs.get("app_name"):
+        attrs["app_name"] = attrs["agent_name"]
     if runtime.agent_version:
         attrs["gen_ai.agent.version"] = runtime.agent_version
     if runtime.host:
@@ -1520,10 +1631,13 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
     trace, OTLPSpanExporter, _, Resource, TracerProvider, BatchSpanProcessor, _, _, _, _ = import_otel()
     tracker = TraceExportTracker()
     exporter = TrackingSpanExporter(
-        OTLPSpanExporter(
-            endpoint=config.trace_url,
-            headers=config.headers,
-            timeout=max(1, config.timeout_ms / 1000),
+        track_http_exporter_response(
+            OTLPSpanExporter(
+                endpoint=config.trace_url,
+                headers=config.headers,
+                timeout=max(1, config.timeout_ms / 1000),
+            ),
+            tracker,
         ),
         tracker,
     )
@@ -1543,8 +1657,11 @@ def create_tracer_provider(config: HookConfig, runtime: RuntimeMetadata) -> Any:
 @dataclass
 class MetricEmitters:
     provider: Any
+    tracker: MetricExportTracker
     workflow_duration: Any
     operation_duration: Any
+    agent_operation_count: Any
+    agent_operation_duration: Any
     token_usage: Any
 
 
@@ -1552,10 +1669,14 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
     if not config.metrics_url:
         return None
     _, _, OTLPMetricExporter, Resource, _, _, MeterProvider, PeriodicExportingMetricReader, ExplicitBucketHistogramAggregation, View = import_otel()
-    exporter = OTLPMetricExporter(
-        endpoint=config.metrics_url,
-        headers=config.headers,
-        timeout=max(1, config.timeout_ms / 1000),
+    tracker = MetricExportTracker()
+    exporter = track_metric_exporter(
+        OTLPMetricExporter(
+            endpoint=config.metrics_url,
+            headers=config.headers,
+            timeout=max(1, config.timeout_ms / 1000),
+        ),
+        tracker,
     )
     reader = PeriodicExportingMetricReader(
         exporter,
@@ -1579,6 +1700,12 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
                 ),
             ),
             View(
+                instrument_name="gen_ai.agent.operation.duration",
+                aggregation=ExplicitBucketHistogramAggregation(
+                    boundaries=[10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240, 20480, 40960, 81920]
+                ),
+            ),
+            View(
                 instrument_name="gen_ai.client.token.usage",
                 aggregation=ExplicitBucketHistogramAggregation(
                     boundaries=[1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864]
@@ -1589,6 +1716,7 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
     meter = provider.get_meter("claude-otel-plugin", PLUGIN_VERSION)
     return MetricEmitters(
         provider=provider,
+        tracker=tracker,
         workflow_duration=meter.create_histogram(
             "gen_ai.workflow.duration",
             unit="s",
@@ -1598,6 +1726,16 @@ def create_metrics_provider(config: HookConfig, runtime: RuntimeMetadata) -> Opt
             "gen_ai.client.operation.duration",
             unit="s",
             description="GenAI client operation duration.",
+        ),
+        agent_operation_count=meter.create_counter(
+            "gen_ai.agent.operation.count",
+            unit="",
+            description="Agent-side operation count.",
+        ),
+        agent_operation_duration=meter.create_histogram(
+            "gen_ai.agent.operation.duration",
+            unit="ms",
+            description="Agent-side operation duration.",
         ),
         token_usage=meter.create_histogram(
             "gen_ai.client.token.usage",
@@ -1713,6 +1851,12 @@ def common_attrs(
     if include_model:
         attr_set(attrs, "gen_ai.request.model", model)
         attr_set(attrs, "gen_ai.response.model", model)
+    for key in ("app_id", "app_name", "agent_id", "agent_name"):
+        attr_set(attrs, key, config.resource_attributes.get(key))
+    if attrs.get("agent_id") and not attrs.get("app_id"):
+        attrs["app_id"] = attrs["agent_id"]
+    if attrs.get("agent_name") and not attrs.get("app_name"):
+        attrs["app_name"] = attrs["agent_name"]
     attr_set(attrs, "user_id", config.user_id)
     return attrs
 
@@ -1730,6 +1874,10 @@ def metric_base_attrs(span_attrs: Dict[str, Any]) -> Dict[str, Any]:
         "gen_ai.provider.name": span_attrs.get("gen_ai.provider.name"),
         "gen_ai.request.model": span_attrs.get("gen_ai.request.model"),
         "gen_ai.response.model": span_attrs.get("gen_ai.response.model"),
+        "app_id": span_attrs.get("app_id"),
+        "app_name": span_attrs.get("app_name"),
+        "agent_id": span_attrs.get("agent_id"),
+        "agent_name": span_attrs.get("agent_name"),
         "host": host,
         "host.name": host,
     }
@@ -1747,6 +1895,50 @@ def metric_operation_outcome(attrs: Dict[str, Any]) -> str:
     if attrs.get("tool_result_status") == "error" or attrs.get("status") == "error":
         return "error"
     return "completed"
+
+
+def metric_agent_operation_attrs(attrs: Dict[str, Any], operation_name: str, *, count: bool) -> Dict[str, Any]:
+    genai_operation_name = attrs.get("gen_ai.operation.name") or operation_name
+    outcome = metric_operation_outcome(attrs)
+    metric_attrs = {
+        **metric_base_attrs(attrs),
+        "gen_ai.operation.name": genai_operation_name,
+        "outcome": outcome,
+    }
+    if outcome == "error":
+        attr_set(metric_attrs, "error.type", attrs.get("error.type") or "_OTHER")
+    elif not count:
+        attr_set(metric_attrs, "error.type", attrs.get("error.type"))
+
+    if genai_operation_name == "chat":
+        if count:
+            attr_set(metric_attrs, "gen_ai.provider.name", attrs.get("gen_ai.provider.name"))
+            attr_set(metric_attrs, "gen_ai.request.model", attrs.get("gen_ai.request.model"))
+            attr_set(metric_attrs, "gen_ai.response.model", attrs.get("gen_ai.response.model"))
+    elif count:
+        metric_attrs.pop("gen_ai.provider.name", None)
+        metric_attrs.pop("gen_ai.request.model", None)
+        metric_attrs.pop("gen_ai.response.model", None)
+
+    if genai_operation_name == "execute_tool":
+        tool_name = attrs.get("gen_ai.tool.name")
+        attr_set(metric_attrs, "gen_ai.tool.name", tool_name)
+        attr_set(metric_attrs, "tool_name", tool_name)
+        attr_set(metric_attrs, "tool_result_status", attrs.get("tool_result_status"))
+    elif genai_operation_name == "skill":
+        skill_name = attrs.get("gen_ai.skill.name") or attrs.get("skill.name")
+        attr_set(metric_attrs, "gen_ai.skill.name", skill_name)
+        attr_set(metric_attrs, "skill_name", skill_name)
+        attr_set(metric_attrs, "skill_source", attrs.get("skill.source.type"))
+        attr_set(metric_attrs, "skill_source_type", attrs.get("skill.source.type"))
+        attr_set(metric_attrs, "skill_result_status", attrs.get("skill.result_status"))
+
+    attr_set(metric_attrs, "operation_name", genai_operation_name)
+    attr_set(metric_attrs, "provider_name", attrs.get("gen_ai.provider.name"))
+    attr_set(metric_attrs, "request_model", attrs.get("gen_ai.request.model"))
+    attr_set(metric_attrs, "response_model", attrs.get("gen_ai.response.model"))
+    attr_set(metric_attrs, "model_name", attrs.get("gen_ai.response.model") or attrs.get("gen_ai.request.model"))
+    return metric_attrs
 
 
 def record_request_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str, Any], duration: Optional[float]) -> None:
@@ -1771,8 +1963,11 @@ def record_operation_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str,
         attr_set(metric_attrs, "tool_result_status", attrs.get("tool_result_status"))
     if metric_attrs.get("gen_ai.operation.name") == "skill":
         attr_set(metric_attrs, "gen_ai.skill.name", attrs.get("gen_ai.skill.name"))
+    agent_count_attrs = metric_agent_operation_attrs(attrs, operation_name, count=True)
+    metrics.agent_operation_count.add(1, agent_count_attrs)
     if duration is not None:
         metrics.operation_duration.record(duration, metric_attrs)
+        metrics.agent_operation_duration.record(duration * 1000, metric_agent_operation_attrs(attrs, operation_name, count=False))
 
 
 def record_token_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str, Any]) -> None:
@@ -1881,6 +2076,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
         build_output_messages(final_text, final_tool_uses, config.max_chars, get_stop_reason(turn.assistant_msgs[-1]) if turn.assistant_msgs else None),
     )
     add_truncation_attrs(root_attrs, "input", user_meta)
+    add_gtrace_attrs(root_attrs, "agent", model=final_model, usage=total_usage)
 
     root = tracer.start_span("invoke_agent", start_time=to_ns(user_ts), attributes=clean_attrs(root_attrs))
     root_context = trace_api.set_span_in_context(root)
@@ -1894,6 +2090,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             "http.status_code": root_error_status_code,
         })
         apply_skill_attrs(skill_attrs, active_skill)
+        add_gtrace_attrs(skill_attrs, "skill", model=final_model)
         skill_span = tracer.start_span(
             f"skill:{active_skill.name}",
             context=root_context,
@@ -1958,6 +2155,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             build_output_messages(assistant_text, tool_uses, config.max_chars, get_stop_reason(assistant)),
         )
         add_usage_attrs(generation_attrs, usage)
+        add_gtrace_attrs(generation_attrs, "llm", model=model, usage=usage)
 
         generation = tracer.start_span(
             "llm",
@@ -2012,6 +2210,9 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
             apply_skill_attrs(tool_attrs, tool_skill or active_skill)
             add_truncation_attrs(tool_attrs, "input", tool_input_meta)
             add_truncation_attrs(tool_attrs, "output", tool_output_meta)
+            attr_set(tool_attrs, "input_preview", compact_text(tool_raw_input, config.max_chars))
+            attr_set(tool_attrs, "output_preview", compact_text(tool_output, config.max_chars))
+            add_gtrace_attrs(tool_attrs, "tool", model=model)
             injected = turn.injected_by_tool_id.get(tool_id)
             if injected:
                 injected_text, injected_meta = truncate_text(injected, config.max_chars)
@@ -2035,6 +2236,9 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                     "reason": compact_text(tool_output, config.max_chars) if is_error else None,
                 })
                 apply_skill_attrs(skill_attrs, tool_skill)
+                attr_set(skill_attrs, "input_preview", compact_text(tool_raw_input, config.max_chars))
+                attr_set(skill_attrs, "output_preview", compact_text(tool_output, config.max_chars))
+                add_gtrace_attrs(skill_attrs, "skill", model=model)
                 tool_context = trace_api.set_span_in_context(tool_span)
                 skill_span = tracer.start_span(
                     f"skill:{tool_skill.name}",
@@ -2081,6 +2285,7 @@ def emit_turn(trace_api: Any, tracer: Any, metrics: Optional[MetricEmitters], co
                 "reason": api_error_reason if is_api_error else None,
                 "http.status_code": api_status_code if is_api_error else None,
             })
+            add_gtrace_attrs(assistant_attrs, "assistant", model=model)
             assistant_span = tracer.start_span(
                 "assistant",
                 context=generation_context,
@@ -2171,6 +2376,7 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
     metrics = None
     emitted = 0
     provider_flushed = False
+    metrics_flushed = False
     try:
         with FileLock(LOCK_FILE):
             global_state = load_state()
@@ -2211,6 +2417,36 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                     session_state.skill_catalog,
                 )
 
+            if metrics:
+                metrics_flushed = True
+                metrics_flush_ok = flush_provider(metrics.provider, config.timeout_ms)
+                metrics_export_ok = metrics.tracker.export_ok(emitted)
+                if not metrics_flush_ok or not metrics_export_ok:
+                    log(
+                        config,
+                        logging.INFO,
+                        "metrics export failed",
+                        emitted=emitted,
+                        transcript_path=str(transcript_path),
+                        metrics_url=config.metrics_url,
+                        export_calls=metrics.tracker.export_calls,
+                        export_result=metrics.tracker.last_result,
+                        export_error=metrics.tracker.last_error,
+                        flush_ok=metrics_flush_ok,
+                    )
+                elif config.debug:
+                    log(
+                        config,
+                        logging.DEBUG,
+                        "metrics export completed",
+                        emitted=emitted,
+                        transcript_path=str(transcript_path),
+                        metrics_url=config.metrics_url,
+                        export_calls=metrics.tracker.export_calls,
+                        export_result=metrics.tracker.last_result,
+                        flush_ok=metrics_flush_ok,
+                    )
+
             if provider is not None:
                 provider_flushed = True
                 trace_flush_ok = flush_provider(provider, config.timeout_ms)
@@ -2226,9 +2462,26 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
                         export_calls=trace_tracker.export_calls if trace_tracker else None,
                         export_result=trace_tracker.last_result if trace_tracker else None,
                         export_error=trace_tracker.last_error if trace_tracker else None,
+                        http_status=trace_tracker.last_http_status if trace_tracker else None,
+                        http_reason=trace_tracker.last_http_reason if trace_tracker else None,
+                        http_body=trace_tracker.last_http_body if trace_tracker else None,
                         flush_ok=trace_flush_ok,
                     )
                     return 0
+                elif config.debug:
+                    log(
+                        config,
+                        logging.DEBUG,
+                        "trace export completed",
+                        emitted=emitted,
+                        transcript_path=str(transcript_path),
+                        trace_url=config.trace_url,
+                        export_calls=trace_tracker.export_calls if trace_tracker else None,
+                        export_result=trace_tracker.last_result if trace_tracker else None,
+                        http_status=trace_tracker.last_http_status if trace_tracker else None,
+                        http_reason=trace_tracker.last_http_reason if trace_tracker else None,
+                        flush_ok=trace_flush_ok,
+                    )
 
             session_state.turn_count += emitted
             session_state.pending_messages = pending_messages
@@ -2243,8 +2496,34 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
     finally:
         if provider is not None and not provider_flushed:
             flush_provider(provider, config.timeout_ms)
-        if metrics:
-            flush_provider(metrics.provider, config.timeout_ms)
+        if metrics and not metrics_flushed:
+            metrics_flush_ok = flush_provider(metrics.provider, config.timeout_ms)
+            metrics_export_ok = metrics.tracker.export_ok(emitted)
+            if not metrics_flush_ok or not metrics_export_ok:
+                log(
+                    config,
+                    logging.INFO,
+                    "metrics export failed",
+                    emitted=emitted,
+                    transcript_path=str(transcript_path),
+                    metrics_url=config.metrics_url,
+                    export_calls=metrics.tracker.export_calls,
+                    export_result=metrics.tracker.last_result,
+                    export_error=metrics.tracker.last_error,
+                    flush_ok=metrics_flush_ok,
+                )
+            elif config.debug:
+                log(
+                    config,
+                    logging.DEBUG,
+                    "metrics export completed",
+                    emitted=emitted,
+                    transcript_path=str(transcript_path),
+                    metrics_url=config.metrics_url,
+                    export_calls=metrics.tracker.export_calls,
+                    export_result=metrics.tracker.last_result,
+                    flush_ok=metrics_flush_ok,
+                )
 
     log(
         config,

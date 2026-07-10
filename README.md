@@ -44,15 +44,31 @@ POST <endpoint>/<metricsPath>
 Requirements:
 
 - Claude Code with plugin support
-- Python 3.10+
-- `uv` recommended
+- `uv` recommended, or `python3 >= 3.10`
 
-Add the marketplace and install the plugin from inside Claude Code:
+Customer install, one command:
+
+```bash
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh
+```
+
+Install a specific release:
+
+```bash
+curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh | sh -s -- 0.1.12
+```
+
+Or add the marketplace and install the plugin from inside Claude Code:
 
 ```text
 /plugin marketplace add GuanceCloud/claude-otel-plugin
 /plugin install claude-otel-plugin@claude-otel-plugin
-/reload-plugins
+```
+
+Or install from a local checkout:
+
+```bash
+sh scripts/install.sh
 ```
 
 Write the export config:
@@ -67,7 +83,7 @@ cat > ~/.claude/gtrace.json <<'JSON'
   "metricsPath": "v1/write/otel-metrics",
   "headers": {
     "X-Token": "<token>",
-    "To-Headless": "true"
+    "to_headless": "true"
   },
   "resourceAttributes": {
     "env": "prod",
@@ -78,18 +94,26 @@ cat > ~/.claude/gtrace.json <<'JSON'
 JSON
 ```
 
-Restart Claude Code, or run `/reload-plugins`.
+Restart Claude Code to apply the plugin.
 
 `resourceAttributes` are exported as shared resource tags on traces and metrics.
 
-For installation, upgrade, uninstall, and dependency details, see
+The plugin no longer requires manual `pip install`. If `uv` is unavailable, the
+hook bootstraps a private virtual environment under
+`~/.claude/state/claude-otel-plugin-runtime/venv` on first run.
+
+Release artifacts are built from tagged versions and published as GitHub
+Release assets. The recommended customer install path uses those assets instead
+of the `main` branch.
+
+For installation, upgrade, uninstall, and runtime details, see
 [docs/install.md](docs/install.md).
 
 ## Documentation
 
 | Document | Description |
 | --- | --- |
-| [docs/install.md](docs/install.md) | Installation, upgrade, uninstall, dependencies, and local install |
+| [docs/install.md](docs/install.md) | Installation, upgrade, uninstall, runtime requirements, and local install |
 | [docs/configuration.md](docs/configuration.md) | Config precedence, GTrace config, environment variables, and resource attributes |
 | [docs/traces.md](docs/traces.md) | Trace/span shape, field names, token semantics, and field migration |
 | [docs/metrics.md](docs/metrics.md) | Metrics, tags, and metric migration |
@@ -107,6 +131,8 @@ Current metrics are derived from the current turn data and use these
 OpenTelemetry GenAI metric names:
 
 - `gen_ai.workflow.duration`
+- `gen_ai.agent.operation.count`
+- `gen_ai.agent.operation.duration`
 - `gen_ai.client.operation.duration`
 - `gen_ai.client.token.usage`
 

@@ -27,7 +27,7 @@ Claude Code.
   "metricsPath": "v1/write/otel-metrics",
   "headers": {
     "X-Token": "<token>",
-    "To-Headless": "true"
+    "to_headless": "true"
   },
   "resourceAttributes": {
     "env": "prod",

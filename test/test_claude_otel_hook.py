@@ -1462,10 +1462,15 @@ class ClaudeOtelHookTest(unittest.TestCase):
             def record(self, value, attributes):
                 self.records.append((value, attributes))
 
+            def add(self, value, attributes):
+                self.records.append((value, attributes))
+
         class FakeMetrics:
             def __init__(self):
                 self.workflow_duration = FakeHistogram()
                 self.operation_duration = FakeHistogram()
+                self.agent_operation_count = FakeHistogram()
+                self.agent_operation_duration = FakeHistogram()
                 self.token_usage = FakeHistogram()
 
         metrics = FakeMetrics()
@@ -1505,6 +1510,29 @@ class ClaudeOtelHookTest(unittest.TestCase):
         self.assertEqual(metrics.operation_duration.records[1][1]["gen_ai.tool.name"], "Bash")
         self.assertEqual(metrics.operation_duration.records[2][1]["gen_ai.operation.name"], "skill")
         self.assertEqual(metrics.operation_duration.records[2][1]["gen_ai.skill.name"], "dashboard")
+        self.assertEqual(metrics.agent_operation_count.records[0][0], 1)
+        self.assertEqual(metrics.agent_operation_count.records[0][1]["gen_ai.operation.name"], "chat")
+        self.assertEqual(metrics.agent_operation_count.records[0][1]["operation_name"], "chat")
+        self.assertEqual(metrics.agent_operation_count.records[0][1]["model_name"], "claude-test")
+        self.assertEqual(metrics.agent_operation_count.records[1][1]["gen_ai.operation.name"], "execute_tool")
+        self.assertEqual(metrics.agent_operation_count.records[1][1]["gen_ai.tool.name"], "Bash")
+        self.assertEqual(metrics.agent_operation_count.records[1][1]["operation_name"], "execute_tool")
+        self.assertEqual(metrics.agent_operation_count.records[1][1]["tool_name"], "Bash")
+        self.assertNotIn("gen_ai.request.model", metrics.agent_operation_count.records[1][1])
+        self.assertEqual(metrics.agent_operation_count.records[2][1]["gen_ai.operation.name"], "skill")
+        self.assertEqual(metrics.agent_operation_count.records[2][1]["gen_ai.skill.name"], "dashboard")
+        self.assertEqual(metrics.agent_operation_count.records[2][1]["operation_name"], "skill")
+        self.assertEqual(metrics.agent_operation_count.records[2][1]["skill_name"], "dashboard")
+        self.assertNotIn("gen_ai.request.model", metrics.agent_operation_count.records[2][1])
+        self.assertEqual(metrics.agent_operation_duration.records[0][0], 250)
+        self.assertEqual(metrics.agent_operation_duration.records[1][0], 500)
+        self.assertEqual(metrics.agent_operation_duration.records[2][0], 750)
+        self.assertEqual(metrics.agent_operation_duration.records[0][1]["gen_ai.operation.name"], "chat")
+        self.assertEqual(metrics.agent_operation_duration.records[0][1]["gen_ai.response.model"], "claude-test")
+        self.assertEqual(metrics.agent_operation_duration.records[1][1]["gen_ai.tool.name"], "Bash")
+        self.assertEqual(metrics.agent_operation_duration.records[2][1]["gen_ai.skill.name"], "dashboard")
+        self.assertEqual(metrics.agent_operation_duration.records[1][1]["tool_name"], "Bash")
+        self.assertEqual(metrics.agent_operation_duration.records[2][1]["skill_name"], "dashboard")
         self.assertEqual(
             [attrs["gen_ai.token.type"] for _, attrs in metrics.token_usage.records],
             ["input", "output"],

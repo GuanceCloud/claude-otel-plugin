@@ -14,6 +14,26 @@ claude plugin validate .
 The current tests cover hook parsing, OTLP trace/metric generation,
 deduplication, and error handling.
 
+## Release Workflow
+
+Build the release package locally:
+
+```bash
+sh scripts/package-release.sh
+```
+
+Create and push a release tag:
+
+```bash
+claude plugin tag .
+git push origin <tag>
+```
+
+Pushing a tag in the form `claude-otel-plugin--v<version>` triggers the GitHub
+Actions release workflow. The workflow checks that the tag version matches
+`.claude-plugin/plugin.json`, runs the test suite, then uploads the release
+assets.
+
 ## Layout
 
 ```text
@@ -70,11 +90,11 @@ claude plugin validate .
 If no data is exported, check:
 
 - The plugin is installed and enabled.
-- Claude Code was restarted or `/reload-plugins` was run.
+- Claude Code was restarted after the plugin changed.
 - `~/.claude/gtrace.json` exists and has `"enabled": true`.
 - `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
 - When using `uv`, `uv` is available in the non-interactive shell `PATH`.
-- Without `uv`, the `python3` environment has the OpenTelemetry dependencies.
+- Without `uv`, `python3 >= 3.10` and `python3 -m venv` are available.
 - `~/.claude/state/claude_otel_hook.log` for HTTP status codes, parse errors, or
   dependency errors.
 

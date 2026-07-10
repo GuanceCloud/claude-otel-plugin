@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "claude-otel-plugin--v*"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches plugin version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#claude-otel-plugin--v}"
+          PLUGIN_VERSION="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path(".claude-plugin/plugin.json").read_text())
+          print(manifest["version"])
+          PY
+          )"
+          test "${TAG_VERSION}" = "${PLUGIN_VERSION}"
+
+      - name: Run tests
+        run: python3 -m unittest discover -s test
+
+      - name: Build release package
+        run: sh scripts/package-release.sh
+
+      - name: Prepare release installer
+        run: cp scripts/install-release.sh dist/install-release.sh
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/claude-otel-plugin.tar.gz
+            dist/claude-otel-plugin.tar.gz.sha256
+            dist/claude-otel-plugin-*.tar.gz
+            dist/install-release.sh
