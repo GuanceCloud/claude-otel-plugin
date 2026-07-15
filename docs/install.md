@@ -48,7 +48,7 @@ Install a specific released version:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.13 --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.14 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 The release installer downloads a GitHub Release package, verifies the SHA-256

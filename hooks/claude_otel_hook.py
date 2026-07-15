@@ -40,7 +40,7 @@ DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
 AGENT_RUNTIME = "claude"
-PLUGIN_VERSION = "0.1.13"
+PLUGIN_VERSION = "0.1.14"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -1884,14 +1884,14 @@ def metric_base_attrs(span_attrs: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in attrs.items() if v not in (None, "")}
 
 
-def metric_request_outcome(attrs: Dict[str, Any]) -> str:
+def metric_request_status(attrs: Dict[str, Any]) -> str:
     final_status = attrs.get("final_status")
     if final_status in {"completed", "cancelled", "unset"}:
         return str(final_status)
     return "error" if attrs.get("status") == "error" else "completed"
 
 
-def metric_operation_outcome(attrs: Dict[str, Any]) -> str:
+def metric_operation_status(attrs: Dict[str, Any]) -> str:
     if attrs.get("tool_result_status") == "error" or attrs.get("status") == "error":
         return "error"
     return "completed"
@@ -1899,13 +1899,13 @@ def metric_operation_outcome(attrs: Dict[str, Any]) -> str:
 
 def metric_agent_operation_attrs(attrs: Dict[str, Any], operation_name: str, *, count: bool) -> Dict[str, Any]:
     genai_operation_name = attrs.get("gen_ai.operation.name") or operation_name
-    outcome = metric_operation_outcome(attrs)
+    status = metric_operation_status(attrs)
     metric_attrs = {
         **metric_base_attrs(attrs),
         "gen_ai.operation.name": genai_operation_name,
-        "outcome": outcome,
+        "status": status,
     }
-    if outcome == "error":
+    if status == "error":
         attr_set(metric_attrs, "error.type", attrs.get("error.type") or "_OTHER")
     elif not count:
         attr_set(metric_attrs, "error.type", attrs.get("error.type"))
@@ -1944,7 +1944,7 @@ def metric_agent_operation_attrs(attrs: Dict[str, Any], operation_name: str, *, 
 def record_request_metrics(metrics: Optional[MetricEmitters], attrs: Dict[str, Any], duration: Optional[float]) -> None:
     if not metrics:
         return
-    metric_attrs = {**metric_base_attrs(attrs), "final_status": metric_request_outcome(attrs)}
+    metric_attrs = {**metric_base_attrs(attrs), "final_status": metric_request_status(attrs)}
     attr_set(metric_attrs, "final_status", attrs.get("final_status"))
     if duration is not None:
         metrics.workflow_duration.record(duration, metric_attrs)

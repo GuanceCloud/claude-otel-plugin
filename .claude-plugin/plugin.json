@@ -1,7 +1,7 @@
 {
   "name": "claude-otel-plugin",
   "description": "Export Claude Code sessions as OpenTelemetry traces",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "author": {
     "name": "Guance"
   },

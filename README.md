@@ -62,7 +62,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.13 --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.14 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 Or add the marketplace and install the plugin from inside Claude Code:

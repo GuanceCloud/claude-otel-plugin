@@ -72,6 +72,12 @@ if has_file "scripts/install.sh" || has_file "scripts/install-release.sh" || has
   add_bullet "Improved local, remote, and release installers with install-time configuration options."
 fi
 
+if git diff --quiet ${PREVIOUS_TAG:+${PREVIOUS_TAG}} ${PREVIOUS_TAG:+${TAG}} -- hooks/claude_otel_hook.py docs/metrics.md test/test_claude_otel_hook.py 2>/dev/null; then
+  :
+elif git diff ${PREVIOUS_TAG:+${PREVIOUS_TAG}} ${PREVIOUS_TAG:+${TAG}} -- hooks/claude_otel_hook.py docs/metrics.md test/test_claude_otel_hook.py | grep -qE '(^[-+].*outcome|^[-+].*status)'; then
+  add_bullet "Renamed the agent operation metric label from `outcome` to `status`."
+fi
+
 if has_file "scripts/package-release.sh"; then
   add_bullet "Updated release packaging so published assets include the installer entry points required by customers."
 fi

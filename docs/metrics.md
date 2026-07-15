@@ -51,7 +51,7 @@
 - `host`
 - `host.name`
 - `gen_ai.operation.name`
-- `outcome`
+- `status`
 
 AM 兼容别名：
 
@@ -79,7 +79,7 @@ AM 兼容别名：
 
 错误相关标签：
 
-- 当 `outcome=error` 时，上报 `error.type`
+- 当 `status=error` 时，上报 `error.type`
 - 如果没有明确错误类型，`error.type` 使用 `_OTHER`
 
 ### 3. `gen_ai.agent.operation.duration`
@@ -97,7 +97,7 @@ AM 兼容别名：
 - `host`
 - `host.name`
 - `gen_ai.operation.name`
-- `outcome`
+- `status`
 
 AM 兼容别名：
 
@@ -122,7 +122,7 @@ AM 兼容别名：
 
 错误相关标签：
 
-- 当 `outcome=error` 时，上报 `error.type`
+- 当 `status=error` 时，上报 `error.type`
 - 如果没有明确错误类型，`error.type` 使用 `_OTHER`
 
 ### 4. `gen_ai.client.operation.duration`
