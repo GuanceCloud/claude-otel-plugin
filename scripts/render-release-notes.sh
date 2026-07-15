@@ -75,7 +75,7 @@ fi
 if git diff --quiet ${PREVIOUS_TAG:+${PREVIOUS_TAG}} ${PREVIOUS_TAG:+${TAG}} -- hooks/claude_otel_hook.py docs/metrics.md test/test_claude_otel_hook.py 2>/dev/null; then
   :
 elif git diff ${PREVIOUS_TAG:+${PREVIOUS_TAG}} ${PREVIOUS_TAG:+${TAG}} -- hooks/claude_otel_hook.py docs/metrics.md test/test_claude_otel_hook.py | grep -qE '(^[-+].*outcome|^[-+].*status)'; then
-  add_bullet "Renamed the agent operation metric label from `outcome` to `status`."
+  add_bullet "Renamed the agent operation metric label from outcome to status."
 fi
 
 if has_file "scripts/package-release.sh"; then
