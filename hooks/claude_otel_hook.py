@@ -40,7 +40,7 @@ DEFAULT_METRICS_PATH = "v1/metrics"
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TIMEOUT_MS = 10_000
 AGENT_RUNTIME = "claude"
-PLUGIN_VERSION = "0.1.14"
+PLUGIN_VERSION = "0.1.15"
 SKILL_NAME_PATTERN = re.compile(r"^/([A-Za-z0-9:_-]+)\b")
 
 
@@ -2357,7 +2357,6 @@ def run(hook_input: Optional[str] = None, env: Optional[Dict[str, str]] = None) 
     config = resolve_config(env=env, cwd=config_cwd)
 
     if not config.enabled:
-        log(config, logging.INFO, "disabled")
         return 0
     if not config.trace_url:
         log(config, logging.INFO, "missing OTLP trace endpoint")

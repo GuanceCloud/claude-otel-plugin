@@ -44,7 +44,7 @@ POST <endpoint>/<metricsPath>
 Requirements:
 
 - Claude Code with plugin support
-- `uv` recommended, or `python3 >= 3.10`
+- `uv` (provides the same hook runtime on macOS, Linux, and Windows)
 
 Customer install, one command:
 
@@ -62,7 +62,16 @@ Install a specific release:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.14 --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.15 --endpoint https://llm-openway.guance.com --x-token <token>
+```
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.ps1))) latest `
+    --endpoint https://llm-openway.guance.com `
+    --x-token <token> `
+    --tag env=prod
 ```
 
 Or add the marketplace and install the plugin from inside Claude Code:
@@ -76,6 +85,10 @@ Or install from a local checkout:
 
 ```bash
 bash scripts/install.sh . --endpoint https://llm-openway.guance.com --x-token <token>
+```
+
+```powershell
+.\scripts\install.ps1 . --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 Write the export config:
@@ -105,12 +118,13 @@ Restart Claude Code to apply the plugin.
 
 `resourceAttributes` are exported as shared resource tags on traces and metrics.
 
-The plugin no longer requires manual `pip install`. If `uv` is unavailable, the
-hook bootstraps a private virtual environment under
-`~/.claude/state/claude-otel-plugin-runtime/venv` on first run.
+The plugin does not require manual `pip install`; `uv` resolves the inline hook
+dependencies on every supported platform.
 
 The installers also accept `--trace-path`, `--metrics-path`, `--header`,
-`--tag`, `--timeout-ms`, `--user-id`, `--max-chars`, and `--no-config`.
+`--tag`, `--timeout-ms`, `--user-id`, `--max-chars`, `--enabled`, and
+`--no-config`. Set `--enabled false` or `"enabled": false` to disable collection
+without uninstalling the plugin.
 
 Release artifacts are built from tagged versions and published as GitHub
 Release assets. The recommended customer install path uses those assets instead

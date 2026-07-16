@@ -6,7 +6,44 @@ on:
       - "claude-otel-plugin--v*"
 
 jobs:
+  windows-validation:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell installers
+        shell: pwsh
+        run: |
+          & ./scripts/install.ps1 --help
+          & ./scripts/install-release.ps1 --help
+          & ./scripts/install-remote.ps1 --help
+
+      - name: Test Windows enabled switch
+        shell: pwsh
+        run: |
+          $fakeBin = Join-Path $env:RUNNER_TEMP "claude-otel-fake-bin"
+          New-Item -ItemType Directory -Path $fakeBin | Out-Null
+          @'
+          @echo off
+          if "%*"=="plugin list --json" echo []
+          exit /b 0
+          '@ | Set-Content -Encoding Ascii (Join-Path $fakeBin "claude.cmd")
+          @'
+          @echo off
+          exit /b 0
+          '@ | Set-Content -Encoding Ascii (Join-Path $fakeBin "uv.cmd")
+          $env:PATH = "$fakeBin;$env:PATH"
+          $configFile = Join-Path $env:RUNNER_TEMP "gtrace.json"
+          & ./scripts/install.ps1 . --enabled false --config-file $configFile
+          $config = Get-Content -Raw $configFile | ConvertFrom-Json
+          if ($config.enabled -ne $false) {
+            throw "install.ps1 did not persist enabled=false"
+          }
+
   build-and-release:
+    needs: windows-validation
     runs-on: ubuntu-latest
 
     permissions:
@@ -48,7 +85,9 @@ jobs:
         run: sh scripts/package-release.sh
 
       - name: Prepare release installer
-        run: cp scripts/install-release.sh dist/install-release.sh
+        run: |
+          cp scripts/install-release.sh dist/install-release.sh
+          cp scripts/install-release.ps1 dist/install-release.ps1
 
       - name: Generate release notes
         run: scripts/render-release-notes.sh "${GITHUB_REF_NAME}" > dist/release-notes.md
@@ -63,3 +102,4 @@ jobs:
             dist/claude-otel-plugin.tar.gz.sha256
             dist/claude-otel-plugin-*.tar.gz
             dist/install-release.sh
+            dist/install-release.ps1

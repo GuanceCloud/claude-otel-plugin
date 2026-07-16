@@ -22,6 +22,33 @@ def json_attr(attrs, key):
 
 
 class ClaudeOtelHookTest(unittest.TestCase):
+    def test_disabled_config_short_circuits_before_export(self):
+        payload = json.dumps(
+            {
+                "session_id": "session-disabled",
+                "transcript_path": "does-not-need-to-exist.jsonl",
+                "cwd": str(ROOT),
+            }
+        )
+
+        with mock.patch.object(hook, "create_tracer_provider") as create_provider, mock.patch.object(hook, "log") as write_log:
+            result = hook.run(payload, env={"CLAUDE_OTEL_ENABLED": "false"})
+
+        self.assertEqual(result, 0)
+        create_provider.assert_not_called()
+        write_log.assert_not_called()
+
+    def test_hook_manifest_uses_cross_platform_exec_form(self):
+        manifest = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+
+        for event in ("Stop", "SessionEnd"):
+            command = manifest["hooks"][event][0]["hooks"][0]
+            self.assertEqual(command["command"], "uv")
+            self.assertEqual(
+                command["args"],
+                ["run", "--quiet", "--script", "${CLAUDE_PLUGIN_ROOT}/hooks/claude_otel_hook.py"],
+            )
+
     def test_extract_session_and_transcript_supports_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "session.jsonl"

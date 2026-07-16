@@ -6,7 +6,7 @@ for `claude-otel-plugin`.
 ## Requirements
 
 - Claude Code with plugin support
-- `uv` recommended, or `python3 >= 3.10`
+- `uv`
 
 `hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. When `uv` is on
 `PATH`, Claude Code runs the hook with:
@@ -21,14 +21,14 @@ Install `uv`:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Without `uv`, the plugin bootstraps a private virtual environment under:
+On Windows PowerShell:
 
-```text
-~/.claude/state/claude-otel-plugin-runtime/venv
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-No manual `pip install` is required. The fallback requirement is a working
-`python3` with the standard `venv` module available.
+No manual `pip install` is required. The Hook invokes `uv` directly in Claude
+Code exec form, which behaves consistently on macOS, Linux, and native Windows.
 
 ## Remote Install
 
@@ -48,7 +48,7 @@ Install a specific released version:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.14 --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.15 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 The release installer downloads a GitHub Release package, verifies the SHA-256
@@ -58,6 +58,20 @@ updates `claude-otel-plugin` from that persistent marketplace source. Installer
 parameters are forwarded to `scripts/install.sh`, so install-time configuration
 is applied both to Claude plugin `userConfig` and to `~/.claude/gtrace.json`
 unless `--no-config` is used.
+
+Native Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.ps1))) latest `
+    --endpoint https://llm-openway.guance.com `
+    --x-token <token> `
+    --tag env=prod `
+    --tag agent_id=claude-monitor
+```
+
+Install a specific release by replacing `latest` with a version such as
+`0.1.15`. The PowerShell installer verifies the same SHA-256 asset and installs
+the persistent marketplace under `%USERPROFILE%\.claude\marketplaces`.
 
 You can also run the same flow manually from inside Claude Code:
 
@@ -77,7 +91,8 @@ bash scripts/install.sh . --endpoint https://llm-openway.guance.com --x-token <t
 
 ## Installer Options
 
-All installers forward the same options to `scripts/install.sh`:
+All installers forward the same options to `scripts/install.sh` on Unix/WSL or
+`scripts/install.ps1` on native Windows:
 
 ```text
 --scope user|project|local
@@ -102,6 +117,9 @@ Notes:
 - `--tag` writes `resourceAttributes`.
 - `--header` appends extra OTLP HTTP headers.
 - `--x-token` is mapped to `headers.X-Token`.
+- `--enabled false` writes `enabled: false` even when it is the only option.
+- When `--enabled` is omitted, a new config defaults to enabled and an existing
+  config keeps its current value.
 - `gtrace` mode defaults to:
   - `tracePath = v1/write/otel-llm`
   - `metricsPath = v1/write/otel-metrics`
@@ -162,6 +180,14 @@ The helper script wraps the same flow:
 bash scripts/install.sh /path/to/claude-otel-plugin --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
+On native Windows:
+
+```powershell
+.\scripts\install.ps1 C:\path\to\claude-otel-plugin `
+    --endpoint https://llm-openway.guance.com `
+    --x-token <token>
+```
+
 For release engineering, build the package locally with:
 
 ```bash
@@ -180,8 +206,7 @@ After installation, check:
 If no data is exported, check:
 
 - The plugin is installed and enabled.
-- `uv`, or `python3 >= 3.10`, is available to non-interactive shells.
-- If `uv` is absent, `python3 -m venv` works on the machine.
+- `uv` is available to non-interactive shells.
 - `~/.claude/gtrace.json` has `"enabled": true`.
 - `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
 - Claude Code was restarted after install or upgrade.

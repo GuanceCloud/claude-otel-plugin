@@ -94,7 +94,7 @@ If no data is exported, check:
 - `~/.claude/gtrace.json` exists and has `"enabled": true`.
 - `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
 - When using `uv`, `uv` is available in the non-interactive shell `PATH`.
-- Without `uv`, `python3 >= 3.10` and `python3 -m venv` are available.
+- `uv` is available to the non-interactive Hook process.
 - `~/.claude/state/claude_otel_hook.log` for HTTP status codes, parse errors, or
   dependency errors.
 

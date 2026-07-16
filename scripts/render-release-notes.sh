@@ -68,7 +68,7 @@ has_file() {
   return 1
 }
 
-if has_file "scripts/install.sh" || has_file "scripts/install-release.sh" || has_file "scripts/install-remote.sh"; then
+if has_file "scripts/install.sh" || has_file "scripts/install-release.sh" || has_file "scripts/install-remote.sh" || has_file "scripts/*.ps1"; then
   add_bullet "Improved local, remote, and release installers with install-time configuration options."
 fi
 
@@ -128,6 +128,7 @@ cat <<EOF
 ## Assets
 
 - \`install-release.sh\`: release installer with install-time configuration options
+- \`install-release.ps1\`: native Windows PowerShell release installer
 - \`claude-otel-plugin.tar.gz\`: canonical release package
 - \`claude-otel-plugin-${VERSION}.tar.gz\`: versioned release package
 - \`claude-otel-plugin.tar.gz.sha256\`: checksum file for the canonical package

@@ -110,3 +110,18 @@ Common fields:
 | `max_chars` | Maximum captured characters for input, output, tool args, and tool results |
 
 Log locations are documented in [development.md](development.md).
+
+`enabled` defaults to `true` after an installer creates a new config. Set it to
+`false` to make the Hook return before transcript parsing, dependency imports,
+state updates, and OTLP export. The plugin stays installed, so setting it back
+to `true` and restarting Claude Code resumes collection.
+
+You can also change it from an installer:
+
+```bash
+bash scripts/install.sh . --enabled false
+```
+
+```powershell
+.\scripts\install.ps1 . --enabled false
+```

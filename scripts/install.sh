@@ -56,6 +56,7 @@ Options:
   -h, --help              Show help.
 
 Environment variables:
+  CLAUDE_OTEL_ENABLED
   CLAUDE_OTEL_ENDPOINT / GTRACE_ENDPOINT
   CLAUDE_OTEL_TRACE_PATH / GTRACE_TRACE_PATH
   CLAUDE_OTEL_METRICS_PATH / GTRACE_METRICS_PATH
@@ -77,14 +78,13 @@ run_python() {
 }
 
 need_runtime() {
-  if command -v uv >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+  if command -v uv >/dev/null 2>&1; then
     return
   fi
   cat >&2 <<'EOF'
-Either `uv` or `python3` is required.
+`uv` is required to run the hook on macOS, Linux, and Windows.
 
-- Preferred: install uv from https://astral.sh/uv/
-- Fallback: ensure python3 >= 3.10 is available in PATH
+- Install uv from https://astral.sh/uv/
 EOF
   exit 1
 }
@@ -251,6 +251,10 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+if [[ -n "$ENABLED_VALUE" ]]; then
+  ENABLED_VALUE="$(normalize_bool "$ENABLED_VALUE")"
+fi
+
 if ! command -v claude >/dev/null 2>&1; then
   echo "claude CLI not found in PATH" >&2
   exit 1
@@ -331,7 +335,7 @@ append_plugin_config() {
 HEADERS_STRING="$(build_headers_string)"
 RESOURCE_ATTRIBUTES_JSON="$(build_resource_attributes_json)"
 
-append_plugin_config "CLAUDE_OTEL_ENABLED" "${ENABLED_VALUE:-true}"
+append_plugin_config "CLAUDE_OTEL_ENABLED" "$ENABLED_VALUE"
 append_plugin_config "OTEL_EXPORTER_OTLP_ENDPOINT" "$ENDPOINT"
 append_plugin_config "CLAUDE_OTEL_TRACE_PATH" "$TRACE_PATH"
 append_plugin_config "CLAUDE_OTEL_METRICS_PATH" "$METRICS_PATH"
@@ -369,7 +373,7 @@ PY
   GTRACE_USER_ID_RUNTIME="$USER_ID" \
   GTRACE_MAX_CHARS_RUNTIME="$MAX_CHARS" \
   GTRACE_DEBUG_RUNTIME="$DEBUG_VALUE" \
-  GTRACE_ENABLED_RUNTIME="${ENABLED_VALUE:-true}" \
+  GTRACE_ENABLED_RUNTIME="$ENABLED_VALUE" \
   run_python - <<'PY'
 import json
 import os
@@ -406,6 +410,8 @@ if not isinstance(resource_attributes, dict):
 
 if enabled:
     config["enabled"] = enabled.lower() in {"1", "true", "yes", "on"}
+elif "enabled" not in config:
+    config["enabled"] = True
 if endpoint:
     config["endpoint"] = endpoint
 if trace_path:
@@ -462,7 +468,7 @@ PY
 }
 
 if [[ "$WRITE_CONFIG" -eq 1 ]]; then
-  if [[ -n "$ENDPOINT" || -n "$X_TOKEN" || -n "$TIMEOUT_MS" || -n "$USER_ID" || -n "$MAX_CHARS" || -n "$DEBUG_VALUE" || "${#HEADERS[@]}" -gt 0 || "${#TAGS[@]}" -gt 0 || -f "$CONFIG_FILE" ]]; then
+  if [[ -n "$ENABLED_VALUE" || -n "$ENDPOINT" || -n "$X_TOKEN" || -n "$TIMEOUT_MS" || -n "$USER_ID" || -n "$MAX_CHARS" || -n "$DEBUG_VALUE" || "${#HEADERS[@]}" -gt 0 || "${#TAGS[@]}" -gt 0 || -f "$CONFIG_FILE" ]]; then
     write_gtrace_config
     log "updated $CONFIG_FILE"
   else
