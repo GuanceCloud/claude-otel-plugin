@@ -26,6 +26,24 @@ log() {
   printf '[install] %s\n' "$1"
 }
 
+array_length() {
+  local array_name="$1"
+  local count
+  count="$(
+    set +u
+    eval 'printf "%s" "${#'"$array_name"'[@]}"'
+  )"
+  printf '%s' "${count:-0}"
+}
+
+array_print_lines() {
+  local array_name="$1"
+  (
+    set +u
+    eval 'printf "%s\n" "${'"$array_name"'[@]}"'
+  )
+}
+
 usage() {
   cat <<EOF
 Usage:
@@ -291,19 +309,25 @@ build_headers_string() {
   if [[ -n "$X_TOKEN" ]]; then
     items+=("X-Token=$X_TOKEN")
   fi
-  for entry in "${HEADERS[@]}"; do
-    items+=("$entry")
-  done
+  if [[ "$(array_length HEADERS)" -gt 0 ]]; then
+    while IFS= read -r entry; do
+      items+=("$entry")
+    done < <(array_print_lines HEADERS)
+  fi
+  if [[ "$(array_length items)" -eq 0 ]]; then
+    printf '\n'
+    return
+  fi
   local IFS=','
   printf '%s\n' "${items[*]}"
 }
 
 build_resource_attributes_json() {
-  if [[ "${#TAGS[@]}" -eq 0 ]]; then
+  if [[ "$(array_length TAGS)" -eq 0 ]]; then
     printf '\n'
     return
   fi
-  printf '%s\n' "${TAGS[@]}" | run_python - <<'PY'
+  array_print_lines TAGS | run_python -c '
 import json
 import sys
 
@@ -318,7 +342,7 @@ for line in sys.stdin.read().splitlines():
     if key and value:
         items[key] = value
 print(json.dumps(items, ensure_ascii=False, separators=(",", ":")))
-PY
+'
 }
 
 PLUGIN_CONFIG_ARGS=()
@@ -348,17 +372,17 @@ append_plugin_config "CLAUDE_OTEL_USER_ID" "$USER_ID"
 
 write_gtrace_config() {
   local headers_json tags_json
-  headers_json="$(printf '%s\n' "${HEADERS[@]}" | run_python - <<'PY'
+  headers_json="$(array_print_lines HEADERS | run_python -c '
 import json
 import sys
 print(json.dumps([line.strip() for line in sys.stdin.read().splitlines() if line.strip()], ensure_ascii=False))
-PY
+'
 )"
-  tags_json="$(printf '%s\n' "${TAGS[@]}" | run_python - <<'PY'
+  tags_json="$(array_print_lines TAGS | run_python -c '
 import json
 import sys
 print(json.dumps([line.strip() for line in sys.stdin.read().splitlines() if line.strip()], ensure_ascii=False))
-PY
+'
 )"
 
   GTRACE_CONFIG_FILE_RUNTIME="$CONFIG_FILE" \
@@ -468,7 +492,7 @@ PY
 }
 
 if [[ "$WRITE_CONFIG" -eq 1 ]]; then
-  if [[ -n "$ENABLED_VALUE" || -n "$ENDPOINT" || -n "$X_TOKEN" || -n "$TIMEOUT_MS" || -n "$USER_ID" || -n "$MAX_CHARS" || -n "$DEBUG_VALUE" || "${#HEADERS[@]}" -gt 0 || "${#TAGS[@]}" -gt 0 || -f "$CONFIG_FILE" ]]; then
+  if [[ -n "$ENABLED_VALUE" || -n "$ENDPOINT" || -n "$X_TOKEN" || -n "$TIMEOUT_MS" || -n "$USER_ID" || -n "$MAX_CHARS" || -n "$DEBUG_VALUE" || "$(array_length HEADERS)" -gt 0 || "$(array_length TAGS)" -gt 0 || -f "$CONFIG_FILE" ]]; then
     write_gtrace_config
     log "updated $CONFIG_FILE"
   else
@@ -485,7 +509,14 @@ if $REFRESH || claude plugin list --json | grep -q "\"id\": \"${PLUGIN_ID}\""; t
   claude plugin uninstall "${PLUGIN_ID}" >/dev/null 2>&1 || true
 fi
 
-claude plugin install --scope "${SCOPE}" "${PLUGIN_CONFIG_ARGS[@]}" "${PLUGIN_ID}"
+if [[ "$(array_length PLUGIN_CONFIG_ARGS)" -gt 0 ]]; then
+  (
+    set +u
+    claude plugin install --scope "${SCOPE}" "${PLUGIN_CONFIG_ARGS[@]}" "${PLUGIN_ID}"
+  )
+else
+  claude plugin install --scope "${SCOPE}" "${PLUGIN_ID}"
+fi
 
 cat <<EOF
 Plugin installed.
