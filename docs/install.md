@@ -6,7 +6,7 @@ for `claude-otel-plugin`.
 ## Requirements
 
 - Claude Code with plugin support
-- `uv`
+- `uv`, or `python3` with `venv`
 
 `hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. When `uv` is on
 `PATH`, Claude Code runs the hook with:
@@ -27,8 +27,9 @@ On Windows PowerShell:
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-No manual `pip install` is required. The Hook invokes `uv` directly in Claude
-Code exec form, which behaves consistently on macOS, Linux, and native Windows.
+No manual `pip install` is required. The Hook prefers `uv`; when `uv` is not
+available, `hooks/run_hook.sh` falls back to `python3 -m venv` and installs the
+required OpenTelemetry packages into a plugin-local runtime directory.
 
 ## Remote Install
 
@@ -206,7 +207,7 @@ After installation, check:
 If no data is exported, check:
 
 - The plugin is installed and enabled.
-- `uv` is available to non-interactive shells.
+- `uv` is available to non-interactive shells, or `python3` with `venv` is available on `PATH`.
 - `~/.claude/gtrace.json` has `"enabled": true`.
 - `endpoint`, `tracePath`, `metricsPath`, and authentication headers are correct.
 - Claude Code was restarted after install or upgrade.

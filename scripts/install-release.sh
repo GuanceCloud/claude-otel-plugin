@@ -28,11 +28,12 @@ if ! command -v tar >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v uv >/dev/null 2>&1; then
+if ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
   cat >&2 <<'EOF'
-`uv` is required to run the hook on macOS, Linux, and Windows.
+Either `uv` or `python3` is required to run the hook on macOS, Linux, and Windows.
 
-- Install uv from https://astral.sh/uv/
+- Preferred: install uv from https://astral.sh/uv/
+- Fallback: ensure python3 with venv support is available on PATH
 EOF
   exit 1
 fi

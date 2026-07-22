@@ -44,7 +44,7 @@ POST <endpoint>/<metricsPath>
 Requirements:
 
 - Claude Code with plugin support
-- `uv` (provides the same hook runtime on macOS, Linux, and Windows)
+- `uv` or `python3` with `venv` support
 
 Customer install, one command:
 
@@ -118,8 +118,9 @@ Restart Claude Code to apply the plugin.
 
 `resourceAttributes` are exported as shared resource tags on traces and metrics.
 
-The plugin does not require manual `pip install`; `uv` resolves the inline hook
-dependencies on every supported platform.
+The plugin does not require manual `pip install`; it prefers `uv` for the hook
+runtime and falls back to a plugin-local `python3` virtual environment when
+`uv` is unavailable.
 
 The installers also accept `--trace-path`, `--metrics-path`, `--header`,
 `--tag`, `--timeout-ms`, `--user-id`, `--max-chars`, `--enabled`, and

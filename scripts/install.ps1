@@ -167,8 +167,8 @@ $InstallType = Normalize-Type $InstallType
 if (-not [string]::IsNullOrWhiteSpace($EnabledValue)) { $EnabledValue = Normalize-Bool $EnabledValue }
 
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { throw "claude CLI not found in PATH" }
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    throw "uv is required to run the hook. Install it from https://astral.sh/uv/"
+if (-not (Get-Command uv -ErrorAction SilentlyContinue) -and -not (Get-Command python3 -ErrorAction SilentlyContinue)) {
+    throw "Either uv or python3 is required to run the hook. Preferred: install uv from https://astral.sh/uv/ . Fallback: ensure python3 with venv support is available on PATH."
 }
 
 if ([string]::IsNullOrWhiteSpace($TracePath)) {
