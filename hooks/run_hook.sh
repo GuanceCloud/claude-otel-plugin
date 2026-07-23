@@ -63,6 +63,8 @@ bootstrap_with_python() {
     fi
   fi
 
+  rmdir "${LOCK_DIR}" >/dev/null 2>&1 || true
+  trap - EXIT INT TERM
   exec "${PYTHON_BIN}" "${HOOK_PY}"
 }
 

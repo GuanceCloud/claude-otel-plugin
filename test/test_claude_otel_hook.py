@@ -38,15 +38,15 @@ class ClaudeOtelHookTest(unittest.TestCase):
         create_provider.assert_not_called()
         write_log.assert_not_called()
 
-    def test_hook_manifest_uses_cross_platform_exec_form(self):
+    def test_hook_manifest_uses_runtime_launcher_with_cross_platform_exec_form(self):
         manifest = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 
         for event in ("Stop", "SessionEnd"):
             command = manifest["hooks"][event][0]["hooks"][0]
-            self.assertEqual(command["command"], "uv")
+            self.assertEqual(command["command"], "sh")
             self.assertEqual(
                 command["args"],
-                ["run", "--quiet", "--script", "${CLAUDE_PLUGIN_ROOT}/hooks/claude_otel_hook.py"],
+                ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"],
             )
 
     def test_extract_session_and_transcript_supports_aliases(self):

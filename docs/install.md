@@ -8,12 +8,14 @@ for `claude-otel-plugin`.
 - Claude Code with plugin support
 - `uv`, or `python3` with `venv`
 
-`hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. When `uv` is on
-`PATH`, Claude Code runs the hook with:
+Claude Code invokes the runtime launcher with:
 
 ```bash
-uv run --quiet --script hooks/claude_otel_hook.py
+sh hooks/run_hook.sh
 ```
+
+`hooks/claude_otel_hook.py` uses PEP 723 inline dependencies. The launcher runs
+it with `uv` when `uv` is on `PATH`.
 
 Install `uv`:
 
