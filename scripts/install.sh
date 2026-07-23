@@ -114,7 +114,9 @@ EOF
 
 normalize_bool() {
   local value="${1:-}"
-  case "${value,,}" in
+  local normalized
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
     1|true|yes|on) printf 'true\n' ;;
     0|false|no|off) printf 'false\n' ;;
     "") printf '\n' ;;

@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv",
-            "args": ["run", "--quiet", "--script", "${CLAUDE_PLUGIN_ROOT}/hooks/claude_otel_hook.py"]
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"]
           }
         ]
       }
@@ -16,8 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv",
-            "args": ["run", "--quiet", "--script", "${CLAUDE_PLUGIN_ROOT}/hooks/claude_otel_hook.py"]
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"]
           }
         ]
       }
