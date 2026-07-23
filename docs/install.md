@@ -49,7 +49,7 @@ Install a specific released version:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.16-rc --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.16-rc2 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 The release installer downloads a GitHub Release package, verifies the SHA-256
@@ -59,6 +59,11 @@ updates `claude-otel-plugin` from that persistent marketplace source. Installer
 parameters are forwarded to `scripts/install.sh`, so install-time configuration
 is applied both to Claude plugin `userConfig` and to `~/.claude/gtrace.json`
 unless `--no-config` is used.
+
+When `scripts/install.sh` or `scripts/install.ps1` is pointed at a temporary
+local package directory, the installer stages that directory into the same
+persistent `~/.claude/marketplaces/claude-otel-plugin-release` location before
+registering the marketplace with Claude Code.
 
 Native Windows PowerShell:
 
@@ -71,7 +76,7 @@ Native Windows PowerShell:
 ```
 
 Install a specific release by replacing `latest` with a version such as
-`0.1.16-rc`. The PowerShell installer verifies the same SHA-256 asset and installs
+`0.1.16-rc2`. The PowerShell installer verifies the same SHA-256 asset and installs
 the persistent marketplace under `%USERPROFILE%\.claude\marketplaces`.
 
 You can also run the same flow manually from inside Claude Code:

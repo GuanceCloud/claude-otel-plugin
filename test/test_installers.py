@@ -10,6 +10,53 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerTest(unittest.TestCase):
+    def test_shell_installer_persists_temporary_marketplace_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            temp = Path(tmp)
+            source = temp / "claude-otel-plugin-package-123"
+            (source / ".claude-plugin").mkdir(parents=True)
+            (source / ".claude-plugin" / "marketplace.json").write_text(
+                '{"name":"claude-otel-plugin","plugins":[{"name":"claude-otel-plugin","source":"./"}]}\n',
+                encoding="utf-8",
+            )
+            bin_dir = temp / "bin"
+            bin_dir.mkdir()
+            call_log = temp / "claude-calls.txt"
+            fake_claude = bin_dir / "claude"
+            fake_claude.write_text(
+                "#!/bin/sh\n"
+                'printf \'%s\\n\' "$*" >> "$FAKE_CLAUDE_CALL_LOG"\n'
+                'if [ "$*" = "plugin list --json" ]; then printf \'[]\\n\'; fi\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_claude.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": str(temp / "home"),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "FAKE_CLAUDE_CALL_LOG": str(call_log),
+            }
+
+            subprocess.run(
+                [
+                    "bash",
+                    str(ROOT / "scripts" / "install.sh"),
+                    str(source),
+                    "--no-config",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            persisted = temp / "home" / ".claude" / "marketplaces" / "claude-otel-plugin-release"
+            self.assertTrue((persisted / ".claude-plugin" / "marketplace.json").exists())
+            calls = call_log.read_text(encoding="utf-8")
+            self.assertIn(f"plugin marketplace add {persisted}", calls)
+
     def test_shell_installer_allows_python3_without_uv(self):
         with tempfile.TemporaryDirectory() as tmp:
             temp = Path(tmp)

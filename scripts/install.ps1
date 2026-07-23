@@ -5,6 +5,7 @@ $PluginId = "claude-otel-plugin@claude-otel-plugin"
 $MarketplaceName = "claude-otel-plugin"
 $MarketplaceSource = if ($env:MARKETPLACE_SOURCE) { $env:MARKETPLACE_SOURCE } else { (Get-Location).Path }
 $MarketplaceSourceWasSet = [bool]$env:MARKETPLACE_SOURCE
+$PersistentMarketplaceRoot = if ($env:CLAUDE_OTEL_PERSISTENT_MARKETPLACE_ROOT) { $env:CLAUDE_OTEL_PERSISTENT_MARKETPLACE_ROOT } else { Join-Path $HOME ".claude\marketplaces\claude-otel-plugin-release" }
 $Scope = if ($env:CLAUDE_OTEL_SCOPE) { $env:CLAUDE_OTEL_SCOPE } else { "user" }
 $WriteConfig = $true
 $Refresh = $false
@@ -84,6 +85,43 @@ function Split-Option([string]$Argument) {
     $position = $Argument.IndexOf("=")
     if ($position -lt 0) { return $null }
     return @($Argument.Substring(0, $position), $Argument.Substring($position + 1))
+}
+
+function Resolve-FullPath([string]$Path) {
+    return [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
+}
+
+function Test-IsLocalMarketplaceSource([string]$Source) {
+    $manifest = Join-Path $Source ".claude-plugin\marketplace.json"
+    return (Test-Path -LiteralPath $manifest)
+}
+
+function Test-ShouldPersistMarketplaceSource([string]$Source, [string]$Destination) {
+    if (-not (Test-IsLocalMarketplaceSource $Source)) { return $false }
+
+    $resolvedSource = Resolve-FullPath $Source
+    $resolvedDestination = Resolve-FullPath $Destination
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+
+    if ($resolvedSource.Equals($resolvedDestination, [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+
+    $tempPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar
+    return $resolvedSource.Equals($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $resolvedSource.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Persist-MarketplaceSource([string]$Source, [string]$Destination) {
+    $resolvedSource = Resolve-FullPath $Source
+    $resolvedDestination = Resolve-FullPath $Destination
+    if (Test-Path -LiteralPath $resolvedDestination) {
+        Remove-Item -LiteralPath $resolvedDestination -Recurse -Force
+    }
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $resolvedDestination)) | Out-Null
+    Copy-Item -LiteralPath $resolvedSource -Destination $resolvedDestination -Recurse
+    Write-InstallLog "staged temporary marketplace into $resolvedDestination"
+    return $resolvedDestination
 }
 
 $arguments = @($args)
@@ -182,6 +220,10 @@ $manifest = Join-Path $MarketplaceSource ".claude-plugin\marketplace.json"
 if (Test-Path -LiteralPath $manifest) {
     & claude plugin validate $MarketplaceSource
     if ($LASTEXITCODE -ne 0) { throw "Plugin validation failed" }
+}
+
+if (Test-ShouldPersistMarketplaceSource $MarketplaceSource $PersistentMarketplaceRoot) {
+    $MarketplaceSource = Persist-MarketplaceSource $MarketplaceSource $PersistentMarketplaceRoot
 }
 
 $headerPairs = @()

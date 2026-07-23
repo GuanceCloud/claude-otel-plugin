@@ -5,6 +5,7 @@ set -euo pipefail
 PLUGIN_ID="claude-otel-plugin@claude-otel-plugin"
 MARKETPLACE_NAME="claude-otel-plugin"
 MARKETPLACE_SOURCE="${MARKETPLACE_SOURCE:-$(pwd)}"
+PERSISTENT_MARKETPLACE_ROOT="${CLAUDE_OTEL_PERSISTENT_MARKETPLACE_ROOT:-$HOME/.claude/marketplaces/claude-otel-plugin-release}"
 SCOPE="${CLAUDE_OTEL_SCOPE:-user}"
 WRITE_CONFIG=1
 REFRESH=false
@@ -133,6 +134,66 @@ normalize_type() {
       exit 2
       ;;
   esac
+}
+
+path_exists_with_manifest() {
+  local candidate="$1"
+  [[ -d "$candidate" && -f "$candidate/.claude-plugin/marketplace.json" ]]
+}
+
+resolve_path() {
+  run_python -c '
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve())
+' "$1"
+}
+
+should_persist_marketplace_source() {
+  if ! path_exists_with_manifest "$MARKETPLACE_SOURCE"; then
+    return 1
+  fi
+
+  local resolved_source resolved_persistent temp_root
+  resolved_source="$(resolve_path "$MARKETPLACE_SOURCE")"
+  resolved_persistent="$(resolve_path "$(dirname "$PERSISTENT_MARKETPLACE_ROOT")")/$(basename "$PERSISTENT_MARKETPLACE_ROOT")"
+  temp_root="$(run_python -c '
+import tempfile
+from pathlib import Path
+
+print(Path(tempfile.gettempdir()).resolve())
+')"
+
+  if [[ "$resolved_source" == "$resolved_persistent" ]]; then
+    return 1
+  fi
+
+  [[ "$resolved_source" == "$temp_root" || "$resolved_source" == "$temp_root"/* ]]
+}
+
+persist_marketplace_source() {
+  local persisted_source
+  persisted_source="$(
+    PERSIST_SOURCE_RUNTIME="$MARKETPLACE_SOURCE" \
+    PERSIST_DEST_RUNTIME="$PERSISTENT_MARKETPLACE_ROOT" \
+    run_python - <<'PY'
+from pathlib import Path
+import os
+import shutil
+
+src = Path(os.environ["PERSIST_SOURCE_RUNTIME"]).expanduser().resolve()
+dst = Path(os.environ["PERSIST_DEST_RUNTIME"]).expanduser()
+
+if dst.exists():
+    shutil.rmtree(dst)
+dst.parent.mkdir(parents=True, exist_ok=True)
+shutil.copytree(src, dst)
+print(dst.resolve())
+PY
+  )"
+  MARKETPLACE_SOURCE="$persisted_source"
+  log "staged temporary marketplace into ${MARKETPLACE_SOURCE}"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -302,6 +363,10 @@ fi
 
 if [[ -f "${MARKETPLACE_SOURCE}/.claude-plugin/marketplace.json" ]]; then
   claude plugin validate "${MARKETPLACE_SOURCE}"
+fi
+
+if should_persist_marketplace_source; then
+  persist_marketplace_source
 fi
 
 build_headers_string() {
