@@ -62,7 +62,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL https://github.com/GuanceCloud/claude-otel-plugin/releases/latest/download/install-release.sh \
-  | bash -s -- 0.1.16-rc2 --endpoint https://llm-openway.guance.com --x-token <token>
+  | bash -s -- 0.1.16-rc3 --endpoint https://llm-openway.guance.com --x-token <token>
 ```
 
 Windows PowerShell:
